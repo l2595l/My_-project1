@@ -312,7 +312,11 @@ namespace KardsLike.Core
                             bool kills = atk.Attack >= tgt.Health;
                             if (!kills) continue;
 
-                            bool dies = tgt.Attack >= atk.Health;
+                            // [阶段2.5 · 任务 A] "我会不会死"必须**问引擎**，不能自己拿 tgt.Attack 猜。
+                            // 火炮 / 轰炸机不吃反击，自己猜会恒等于"会死"，于是 AI 放弃必杀交换 ——
+                            // 新规则在 AI 对局里等于没上线，200 局也测不出它的真实影响（测试失效）。
+                            // 走同一个出口还有一层好处：以后加"重甲""烟幕"时 AI 自动跟上，不必再改这里。
+                            bool dies = GameEngine.CounterDamage(atk, tgt) >= atk.Health;
                             if (requireNoLoss && dies) continue;
 
                             int score = tgt.Attack * 10 + tgt.Health - (dies ? atk.Health * 2 : 0);

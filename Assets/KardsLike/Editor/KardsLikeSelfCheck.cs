@@ -36,7 +36,7 @@ namespace KardsLike.EditorTools
             RunAll();
         }
 
-        /// <summary>跑完 6 项自检，返回是否全部通过。</summary>
+        /// <summary>跑完 9 项自检，返回是否全部通过。</summary>
         public static bool RunAll()
         {
             StringBuilder sb = new StringBuilder();
@@ -48,8 +48,9 @@ namespace KardsLike.EditorTools
             sb.AppendLine("- 生成时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             sb.AppendLine("- Unity 版本：" + Application.unityVersion);
             sb.AppendLine("- 对局模式：MatchMode.AiVsAi（自检没有 UI，需要自由驱动双方）");
-            sb.AppendLine("- 覆盖：面板预算 / 资源上限 / 同种子可复现 / 终止性与先手偏差 / " +
-                          "部署失调与每回合一次行动 / L1 判负 / 三条战线与行动费 / HQ 单位与疲劳结算");
+            sb.AppendLine("- 覆盖：面板预算与兵种/行动费 / 资源上限 / 同种子可复现 / 终止性与先手偏差 / " +
+                          "部署失调与每回合一次行动 / L1 判负 / 三条战线与行动费 / HQ 单位与疲劳结算 / " +
+                          "兵种反击例外");
             sb.AppendLine();
             sb.AppendLine("| # | 检查项 | 结果 |");
             sb.AppendLine("|---|---|---|");
@@ -80,6 +81,9 @@ namespace KardsLike.EditorTools
 
             bodies.Add(RunHqUnitAndFatigue(out var ok8, out string title8));
             titles.Add(title8); results.Add(ok8);
+
+            bodies.Add(RunUnitTypeCounterRules(out var ok9, out string title9));
+            titles.Add(title9); results.Add(ok9);
 
             for (int i = 0; i < results.Count; i++)
             {
@@ -113,27 +117,37 @@ namespace KardsLike.EditorTools
 
         private static string RunPanelBudget(out bool ok, out string title)
         {
-            title = "面板预算：CardDb.ValidatePanelBudget() 返回 null";
+            title = "卡牌数据：面板预算 + 兵种已填写 + 行动费与档位一致（ValidatePanelBudget 返回 null）";
             ok = false;
 
             string violation = CardDb.ValidatePanelBudget();
             ok = (violation == null);
 
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("## 第 1 项 · 面板预算");
+            sb.AppendLine("## 第 1 项 · 卡牌数据（面板预算 / 兵种 / 行动费）");
             sb.AppendLine();
-            sb.AppendLine("口径：单位卡 `攻击 + 生命 = 2 × 费用 + 1`（设计文档 §4.1）。");
+            sb.AppendLine("[阶段2.5 · 任务 A] 本条由「只查面板预算」扩展为查三条：");
+            sb.AppendLine();
+            sb.AppendLine("| # | 口径 | 出处 |");
+            sb.AppendLine("|---|---|---|");
+            sb.AppendLine("| ① | 单位卡 `攻击 + 生命 = 2 × 费用 + 1` | 设计文档 §4.1 |");
+            sb.AppendLine("| ② | 单位卡的**兵种必须显式填写**（`UnitType.None` 是「忘填」的哨兵值） | 设计文档 §10.1 |");
+            sb.AppendLine("| ③ | `ActionCost` 必须等于档位期望（1~2 费→1 / 3~4 费→2 / 5~6 费→3） | 设计文档 §10.3 |");
+            sb.AppendLine();
+            sb.AppendLine("第 ② 条存在的理由：兵种漏填会静默地按「普通双向结算」跑，");
+            sb.AppendLine("在 200 局数据里表现为「数字说不通但查不出原因」—— 必须在数据层就挡住。");
             sb.AppendLine();
             sb.AppendLine("检查的卡（" + CardDb.Units.Length + " 张单位卡）：");
             sb.AppendLine();
-            sb.AppendLine("| id | 卡名 | 费用 | 攻/命 | 面板 | 预算 |");
-            sb.AppendLine("|---|---|---|---|---|---|");
+            sb.AppendLine("| id | 卡名 | 费用 | 攻/命 | 面板 | 预算 | 兵种 | 行动费 | 档位期望 |");
+            sb.AppendLine("|---|---|---|---|---|---|---|---|---|");
             for (int i = 0; i < CardDb.Units.Length; i++)
             {
                 CardDef c = CardDb.Units[i];
                 sb.AppendLine("| `" + c.Id + "` | " + c.Name + " | " + c.Cost + " | " +
                               c.Attack + "/" + c.Health + " | " + c.PanelValue + " | " +
-                              CardDef.BudgetForCost(c.Cost) + " |");
+                              CardDef.BudgetForCost(c.Cost) + " | " + c.UnitKind + " | " +
+                              c.ActionCost + " | " + CardDb.ExpectedActionCost(c.Cost) + " |");
             }
             sb.AppendLine();
             sb.AppendLine(ok
@@ -880,8 +894,205 @@ namespace KardsLike.EditorTools
         }
 
         // ==================================================================
+        // 第 9 项 · 兵种反击例外（[阶段2.5 · 任务 A] 新增）
+        // ==================================================================
+
+        private static string RunUnitTypeCounterRules(out bool ok, out string title)
+        {
+            title = "兵种反击例外：火炮/轰炸机免反击、轰炸机不还手、战斗机与步兵坦克正常双向结算";
+            ok = false;
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("## 第 9 项 · 兵种反击例外（设计文档 §10.2）");
+            sb.AppendLine();
+            sb.AppendLine("### 9.0 为什么必须手工摆棋盘");
+            sb.AppendLine();
+            sb.AppendLine("这三条规则在随机对局里触发概率极低 —— 池内只有 **1 张火炮、0 张战斗机、0 张轰炸机**，");
+            sb.AppendLine("靠 200 局抽样等于没测。所以下面每条规则都用**独立构造的一局**来断言。");
+            sb.AppendLine();
+            sb.AppendLine("⚠️ **期望值全部硬编码。** 绝不调用 `CounterDamage` 去算期望值 —— 那是循环论证，");
+            sb.AppendLine("被测代码写错了也会通过。这是本项唯一有意义的写法。");
+            sb.AppendLine();
+            sb.AppendLine("夹具：清空双方手牌与牌库（本项不推进回合，所以不会触发疲劳）、资源给 99（让行动费闸门不参与）；");
+            sb.AppendLine("攻击者放在**我方支援阵线**，目标放在**敌方前线**（支援线单位唯一够得着的敌人）。");
+            sb.AppendLine();
+            sb.AppendLine("> 战斗机 / 轰炸机本轮**还没进卡池**（拍板项 ③ 排在下一轮），但规则必须现在就验 ——");
+            sb.AppendLine("> 否则等卡进池时才发现规则写错，200 局的归因会混在一起。");
+            sb.AppendLine("> 它们的 `CardDef` 是本文件的**局部夹具**，不放进 `CardDb.Cards`，所以不会进牌库、不影响任何真实对局。");
+            sb.AppendLine();
+
+            CardDef fighter = new CardDef("_test_fighter", "战斗机(测试)", 3, 2,
+                                          CardType.Unit, UnitType.Fighter, 4, 3, EffectId.None, 0, "自检夹具，不进卡池");
+            CardDef bomber = new CardDef("_test_bomber", "轰炸机(测试)", 4, 2,
+                                         CardType.Unit, UnitType.Bomber, 4, 5, EffectId.None, 0, "自检夹具，不进卡池");
+
+            CardDef mg = CardDb.Get("unit_mg_nest");        // 步兵 2/3
+            CardDef para = CardDb.Get("unit_paratrooper");  // 步兵 3/4
+            CardDef armored = CardDb.Get("unit_armored");   // 坦克 4/5
+            CardDef howitzer = CardDb.Get("unit_howitzer"); // 火炮 6/5
+
+            // ---- 9.1 单位互攻的反击矩阵 ----
+            string[] labels = {
+                "步兵 2/3 → 步兵 3/4（基准双向结算）",
+                "坦克 4/5 → 步兵 3/4（坦克不吃例外）",
+                "战斗机 4/3 → 步兵 3/4（战斗机正常承受反击）",
+                "火炮 6/5 → 坦克 4/5（火炮**不受**反击）",
+                "轰炸机 4/5 → 坦克 4/5（轰炸机**不承受**反击）",
+                "步兵 2/3 → 火炮 6/5（火炮当防守方**照常还手**）",
+                "步兵 2/3 → 轰炸机 4/5（轰炸机**不造成**反击）"
+            };
+            CardDef[] atkDefs = { mg, armored, fighter, howitzer, bomber, mg, mg };
+            CardDef[] tgtDefs = { para, para, para, armored, armored, howitzer, bomber };
+            int[] expAtkLoss = { 3, 3, 3, 0, 0, 6, 0 };
+            int[] expTgtLoss = { 2, 4, 4, 6, 4, 2, 2 };
+
+            sb.AppendLine("### 9.1 单位互攻的反击矩阵");
+            sb.AppendLine();
+            sb.AppendLine("| 场景 | 攻击者掉血 | 目标掉血 | 结果 |");
+            sb.AppendLine("|---|---|---|---|");
+
+            bool allExchange = true;
+            for (int i = 0; i < labels.Length; i++)
+            {
+                GameEngine eng = NewCounterFixture((uint)(500 + i));
+                UnitInstance atk = PlaceUnit(eng, atkDefs[i], 0, Line.Support);
+                UnitInstance tgt = PlaceUnit(eng, tgtDefs[i], 1, Line.Front);
+
+                int a0 = atk.Health, t0 = tgt.Health;
+                bool attacked = eng.AttackWithUnit(atk.InstanceId, tgt.InstanceId);
+                int aLoss = a0 - atk.Health;
+                int tLoss = t0 - tgt.Health;
+
+                bool pass = attacked && aLoss == expAtkLoss[i] && tLoss == expTgtLoss[i];
+                if (!pass) allExchange = false;
+                sb.AppendLine("| " + labels[i] + " | " + aLoss + "（期望 " + expAtkLoss[i] + "） | " +
+                              tLoss + "（期望 " + expTgtLoss[i] + "） | " + Mark(pass) + " |");
+            }
+            sb.AppendLine();
+
+            // ---- 9.2 打 HQ（含对照组）----
+            // ⚠️ 这一节必须带对照组：
+            //   "轰炸机打 HQ 不掉血"有两条独立理由（HQ 攻 0 + 轰炸机免反击），
+            //   所以它单独**证明不了**轰炸机免反击生效了。
+            //   必须配一个"步兵打 HQ 也不掉血"的对照 —— 后者只可能因为 HQ 攻 0。
+            sb.AppendLine("### 9.2 打 HQ（带对照组）");
+            sb.AppendLine();
+            sb.AppendLine("| 场景 | 攻击者掉血 | 敌方 HQ 掉血 | 结果 |");
+            sb.AppendLine("|---|---|---|---|");
+
+            string[] hqLabels = { "轰炸机 4/5 → 敌方 HQ", "步兵 2/3 → 敌方 HQ（**对照组**）" };
+            CardDef[] hqAtkDefs = { bomber, mg };
+            int[] hqExpAtkLoss = { 0, 0 };
+            int[] hqExpHqLoss = { 4, 2 };
+
+            bool allHq = true;
+            for (int i = 0; i < hqLabels.Length; i++)
+            {
+                GameEngine eng = NewCounterFixture((uint)(600 + i));
+                UnitInstance atk = PlaceUnit(eng, hqAtkDefs[i], 0, Line.Front);   // 只有前线单位够得着 HQ
+
+                int a0 = atk.Health;
+                int h0 = eng.State.Players[1].HqHealth;
+                bool attacked = eng.AttackWithUnit(atk.InstanceId, -1);           // -1 = 敌方 HQ
+                int aLoss = a0 - atk.Health;
+                int hqLoss = h0 - eng.State.Players[1].HqHealth;
+
+                bool pass = attacked && aLoss == hqExpAtkLoss[i] && hqLoss == hqExpHqLoss[i];
+                if (!pass) allHq = false;
+                sb.AppendLine("| " + hqLabels[i] + " | " + aLoss + "（期望 " + hqExpAtkLoss[i] + "） | " +
+                              hqLoss + "（期望 " + hqExpHqLoss[i] + "） | " + Mark(pass) + " |");
+            }
+            sb.AppendLine();
+            sb.AppendLine("对照组说明：步兵**没有**任何免反击规则，它打 HQ 也不掉血 ⇒ 唯一原因是 **HQ 攻 0**。");
+            sb.AppendLine("⇒ 「打 HQ 不受反击」仍然由数值保证，而不是被兵种规则顺带覆盖掉的。");
+            sb.AppendLine();
+
+            // ---- 9.3 池内兵种分布（用于判断本轮 200 局变化多少算合理）----
+            UnitType[] kinds = { UnitType.Infantry, UnitType.Tank, UnitType.Artillery,
+                                 UnitType.Fighter, UnitType.Bomber };
+            string[] kindNames = { "步兵", "坦克", "火炮", "战斗机", "轰炸机" };
+
+            sb.AppendLine("### 9.3 池内兵种分布（判断 200 局变化幅度的依据）");
+            sb.AppendLine();
+            sb.AppendLine("| 兵种 | 单位卡张数 |");
+            sb.AppendLine("|---|---|");
+            for (int i = 0; i < kinds.Length; i++)
+            {
+                sb.AppendLine("| " + kindNames[i] + " | " + CardDb.CountUnitsOfKind(kinds[i]) + " |");
+            }
+            sb.AppendLine();
+            sb.AppendLine("⇒ 本轮**真正改变对局行为的只有榴弹炮一张**（它从「一换一」变成「白吃」）。");
+            sb.AppendLine("所以 200 局里应当只有少数几局发生变化 —— 这是一条可证伪的预测：");
+            sb.AppendLine("**若 200 局大面积改变，说明规则写错了地方（例如把坦克也写成了免反击），必须回头查。**");
+            sb.AppendLine();
+
+            // ---- 9.4 数据层断言 ----
+            bool howitzerOnlyArtillery = CardDb.CountUnitsOfKind(UnitType.Artillery) == 1
+                                         && howitzer.UnitKind == UnitType.Artillery;
+            bool airNotInPoolYet = CardDb.CountUnitsOfKind(UnitType.Fighter) == 0
+                                   && CardDb.CountUnitsOfKind(UnitType.Bomber) == 0;
+            bool hqAttackZero = CardDb.Hq.Attack == 0 && CardDb.Hq.UnitKind == UnitType.None;
+            bool actionCostIsPureField = true;
+            for (int i = 0; i < CardDb.Cards.Length; i++)
+            {
+                if (GameEngine.ActionCostOf(CardDb.Cards[i]) != CardDb.Cards[i].ActionCost)
+                    actionCostIsPureField = false;
+            }
+            if (GameEngine.ActionCostOf(CardDb.Hq) != CardDb.Hq.ActionCost) actionCostIsPureField = false;
+
+            sb.AppendLine("### 9.4 数据层断言");
+            sb.AppendLine();
+            sb.AppendLine("| 检查 | 结果 |");
+            sb.AppendLine("|---|---|");
+            sb.AppendLine("| 池内火炮只有榴弹炮一张（⇒ 200 局的变化可全部归因到它） | " + Mark(howitzerOnlyArtillery) + " |");
+            sb.AppendLine("| 战斗机 / 轰炸机尚未进池（拍板项 ③ 排在下一轮） | " + Mark(airNotInPoolYet) + " |");
+            sb.AppendLine("| HQ 攻击力为 0 且不是兵种 | " + Mark(hqAttackZero) + " |");
+            sb.AppendLine("| `ActionCostOf` 已退化为一行取值（与 `CardDef.ActionCost` 逐卡一致） | " + Mark(actionCostIsPureField) + " |");
+            sb.AppendLine();
+
+            ok = allExchange && allHq && howitzerOnlyArtillery && airNotInPoolYet
+                 && hqAttackZero && actionCostIsPureField;
+
+            sb.AppendLine("**结论：" + (ok
+                ? "兵种反击例外全部符合设计文档 §10.2 —— 火炮只免「承受」不免「造成」，"
+                  + "轰炸机双向都不参与反击，战斗机与步兵 / 坦克正常双向结算，打 HQ 仍由「HQ 攻 0」保证。"
+                : "兵种反击例外行为不符预期，详见上表。") + "**");
+            sb.AppendLine();
+            return sb.ToString();
+        }
+
+        // ==================================================================
         // 工具
         // ==================================================================
+
+        /// <summary>[阶段2.5 · 任务 A] 第 9 项的夹具：造一局、清空双方手牌与牌库、资源给足。
+        /// 本项**不推进回合**，所以清空牌库不会触发疲劳结算，不会干扰断言。</summary>
+        private static GameEngine NewCounterFixture(uint seed)
+        {
+            GameEngine eng = new GameEngine(seed, MatchMode.AiVsAi);
+            eng.StartMatch();
+            for (int i = 0; i < 2; i++)
+            {
+                eng.State.Players[i].Hand.Clear();
+                eng.State.Players[i].Deck.Clear();
+                eng.State.Players[i].Resources = 99;
+            }
+            return eng;
+        }
+
+        /// <summary>[阶段2.5 · 任务 A] 第 9 项的夹具：把一个单位直接摆到指定战线，
+        /// 并清掉"部署失调 / 本回合已行动"两个标记（否则 CanUnitAct 会拦住攻击，断言全部失败）。
+        /// 注意 UnitInstance 构造时默认 Line = Support，所以前线必须显式加进 Frontline 列表。</summary>
+        private static UnitInstance PlaceUnit(GameEngine eng, CardDef def, int owner, Line line)
+        {
+            UnitInstance u = new UnitInstance(eng.State.NextUnitInstanceId++, def, owner);
+            u.Line = line;
+            if (line == Line.Support) eng.State.Players[owner].SupportLine.Add(u);
+            else eng.State.Frontline.Add(u);
+            u.DeployedThisTurn = false;
+            u.HasOperatedThisTurn = false;
+            return u;
+        }
 
         /// <summary>某类终局占 200 局的百分比（只用于第 4 项的报告）。</summary>
         private static string Pct(int n) { return (n * 100.0 / BiasGameCount).ToString("F1") + "%"; }

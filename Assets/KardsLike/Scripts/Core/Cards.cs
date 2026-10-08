@@ -24,6 +24,37 @@
     }
 
     /// <summary>
+    /// [阶段2.5 · 任务 A] **单位兵种**。见设计文档 §9.1 / §10.1。
+    ///
+    /// 它不是"关键字"（阶段 3 的内容），而是**基础地理与结算规则**：它决定
+    ///   ① 这个单位互相攻击时是否参与反击结算（本阶段，已实现）
+    ///   ② 它够得着哪条战线上的目标（任务 D，尚未实现 —— 现行引擎等价于"全员步兵"）
+    ///
+    /// ⚠️ **`None` 是哨兵值，不是"第六种兵种"。** 把它定为 0 有两个刻意的理由：
+    ///   ① 它是 C# 枚举的默认值 ⇒ 新加单位卡时**忘记填兵种会被 CardDb 校验抓出来**，
+    ///      而不是静默地当成步兵（那种错误在 200 局数据里表现为"数据诡异但查不出原因"）；
+    ///   ② HQ 与指令卡**本来就不是兵种**，给它们一个 `Infantry` 会让
+    ///      "HQ 攻 0 所以打它不被反击"这件事误依赖"HQ 是步兵"这个巧合。
+    ///      `None` 让默认行为（普通双向结算）天然正确。
+    /// </summary>
+    public enum UnitType
+    {
+        /// <summary>不是兵种。HQ 与指令卡用它；也是"忘填"的默认值，便于校验报错。</summary>
+        None = 0,
+        /// <summary>步兵：基准兵种，双向结算。射程上只能打相邻战线（任务 D 才实现）。</summary>
+        Infantry = 1,
+        /// <summary>坦克：双向结算。Kards 口径下同一回合可移动 + 攻击（本作当前仍是"移动与攻击二选一"）。</summary>
+        Tank = 2,
+        /// <summary>火炮：**造成**反击伤害，但**不受**反击伤害（阶段 2.5 任务 A 实现）。</summary>
+        Artillery = 3,
+        /// <summary>战斗机：正常双向结算（承受反击）。拦截轰炸机是任务 D 的内容。</summary>
+        Fighter = 4,
+        /// <summary>轰炸机：**既不造成也不承受**反击伤害（阶段 2.5 任务 A 实现）。
+        /// "被战斗机攻击时例外"因官方原文歧义，登记未实现，见 §10.2。</summary>
+        Bomber = 5
+    }
+
+    /// <summary>
     /// [STAGE2B] 单位所在的战线（阶段 2 任务 B：三条战线）。见设计文档 §7.1。
     ///
     /// 三条战线的结构（自上而下）：
@@ -80,7 +111,31 @@
         /// <summary>费用（资源）。设计范围 1 ~ 6。</summary>
         public readonly int Cost;
 
+        /// <summary>
+        /// [阶段2.5 · 任务 A] **行动花费**：这个单位"行动一次"（移动或攻击）要花几点资源。
+        /// 指令卡与 HQ 固定为 0（它们不行动）。
+        ///
+        /// 为什么必须是**显式数据字段**、而不是引擎里算出来的：
+        ///   卡面（任务 B）要把它印在左上角，而卡面读不到引擎的推导逻辑。
+        ///   若让 View 把档位规则再抄一遍，规则就有了两个真相来源 ——
+        ///   本项目已因"两套语义"踩过两次（F2 精准打击归属、F6 召唤失调）。
+        ///   做成数据之后，卡面与引擎**不可能**不一致。
+        ///
+        /// 数值规则（必须满足，由 CardDb.ValidatePanelBudget 校验）：
+        ///   部署费用 1~2 → 1 点；3~4 → 2 点；5~6 → 3 点。基准见 CardDb.ExpectedActionCost()。
+        /// </summary>
+        public readonly int ActionCost;
+
         public readonly CardType Type;
+
+        /// <summary>
+        /// [阶段2.5 · 任务 A] **兵种**。决定这张单位卡在战斗结算里受哪条反击规则约束。
+        ///
+        /// 命名说明：刻意不叫 `Type2`，也不叫 `UnitType`（会与类型名撞车）。
+        /// `UnitKind` 读作"这张卡的兵种是…"，与已有的 `Type`（大类：单位 / 指令 / HQ）互补而不混淆。
+        /// 指令卡与 HQ 固定为 <see cref="UnitType.None"/>。
+        /// </summary>
+        public readonly UnitType UnitKind;
 
         /// <summary>【仅单位卡】攻击力。指令卡固定为 0。</summary>
         public readonly int Attack;
@@ -97,14 +152,25 @@
         /// <summary>卡面描述文字。</summary>
         public readonly string Text;
 
-        public CardDef(string id, string name, int cost, CardType type,
+        /// <summary>
+        /// 构造一张卡的静态定义。
+        ///
+        /// 参数顺序刻意把两组成对的字段放在一起：
+        ///   `cost / actionCost`（两种花费）与 `type / unitKind`（两种分类）。
+        /// ⚠️ 参数顺序若写错，由 `CardDb.ValidatePanelBudget()` 兜底 ——
+        ///    行动费与档位不一致会被自检第 1 项直接抓出来，不会静默上线。
+        /// </summary>
+        public CardDef(string id, string name, int cost, int actionCost,
+                       CardType type, UnitType unitKind,
                        int attack, int health,
                        EffectId effect, int effectValue, string text)
         {
             Id = id;
             Name = name;
             Cost = cost;
+            ActionCost = actionCost;
             Type = type;
+            UnitKind = unitKind;
             Attack = attack;
             Health = health;
             Effect = effect;

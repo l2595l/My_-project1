@@ -223,10 +223,12 @@ namespace KardsLike.Core
                 return false;
             }
 
-            // 先把两边的攻击力都读出来，再同时施加伤害 —— 避免"先手方占便宜"。
-            // 打 HQ 时 damageToAttacker = HQ.Attack = 0，等价于旧版本的"单向结算"。
+            // 先把两边的伤害都算出来，再同时施加伤害 —— 避免"先手方占便宜"。
+            //   · damageToTarget   = **主动攻击伤害**，永远等于攻击者的攻击力（与兵种无关）
+            //   · damageToAttacker = **反击伤害**，[阶段2.5 · 任务 A] 起按兵种分岔
+            //     判定**全部**收口在 CounterDamage() 里，这里不允许再出现第二个 if 去改它。
             int damageToTarget = attacker.Attack;
-            int damageToAttacker = target.Attack;
+            int damageToAttacker = CounterDamage(attacker, target);
 
             attacker.Health -= damageToAttacker;
             target.Health -= damageToTarget;
@@ -239,6 +241,44 @@ namespace KardsLike.Core
 
             ResolveDeaths();   // 清理阵亡 + 检查 HQ 是否归零（含刚被打的这个 HQ）
             return true;
+        }
+
+        /// <summary>
+        /// [阶段2.5 · 任务 A] **反击伤害的唯一判定出口** —— 交战双方按兵种分岔的全部逻辑都在这里。
+        ///
+        /// 口径（设计文档 §10.2 / 《阶段2.5-任务A-规则复述与设计问答复核.md》R3~R5）：
+        ///   · **火炮**：造成反击，但**不受**反击 ⇒ 它当攻击者时不吃反击；当防守方时照常还手
+        ///   · **轰炸机**：既不造成也不承受反击 ⇒ 当攻击者不吃反击，当防守方不还手
+        ///     （两个方向都归零，所以这一条只写一句话就够）
+        ///   · **战斗机 / 步兵 / 坦克**：正常双向结算，不做任何特判
+        ///   · **HQ**：攻击力恒为 0 ⇒ 打 HQ 天然返回 0。"打 HQ 不被反击"由数值保证，不靠特判
+        ///
+        /// 为什么必须是独立方法、且必须是 `internal` 而不是 `private`：
+        ///   ① 三条兵种规则若散在 AttackWithUnit 的多个 if 里，最容易写成
+        ///      "轰炸机当攻击者时免反击、当目标时忘了免"，两个方向行为不一致 —— 收口到一处即不可能发生；
+        ///   ② **GreedyAI 判断"这次交换我会不会死"必须用同一份规则**。
+        ///      若设成 private，AI 只能自己把 `target.Attack` 再算一遍 ——
+        ///      那就是"规则有两个真相来源"，正是本阶段做行动费字段化要消灭的东西。
+        ///      `internal` 保证只有同程序集（Core）的引擎与 AI 用得到，View 层拿不到
+        ///      （与既有的 BeginAiTurn / EndAiTurn 是同一套约定）。
+        ///
+        /// ⚠️ 本轮**不实现**"轰炸机被战斗机攻击时承受反击"这个例外 ——
+        ///    官方原文对它的主语有歧义，且本轮没有战斗机实体。三种可能口径与不猜的理由见 §10.2。
+        /// </summary>
+        internal static int CounterDamage(UnitInstance attacker, UnitInstance target)
+        {
+            if (attacker == null || target == null) return 0;
+
+            // 轰炸机：既不承受（当攻击者）、也不造成（当防守方）反击。两个方向都归零。
+            if (attacker.Def.UnitKind == UnitType.Bomber) return 0;
+            if (target.Def.UnitKind == UnitType.Bomber) return 0;
+
+            // 火炮：不受反击。注意只挡"攻击者"这一侧 —— 它当防守方时照常还手。
+            if (attacker.Def.UnitKind == UnitType.Artillery) return 0;
+
+            // 其余（步兵 / 坦克 / 战斗机）与 HQ：走常规双向结算。
+            // HQ 的攻击力是 0，于是"打 HQ 不受反击"由数值保证。
+            return target.Attack;
         }
 
         /// <summary>[STAGE2C] 把"攻击目标参数"解析成单位实例。负数 = 敌方 HQ。</summary>
