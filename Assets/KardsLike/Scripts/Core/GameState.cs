@@ -90,7 +90,7 @@ namespace KardsLike.Core
         /// [STAGE2B] **支援阵线**上的单位（原 `Board`）。这是该玩家自己的一条线，
         /// 敌方单位永远进不来，新单位也只能部署在这里。容量见 `GameEngine.SupportLineCapacity`。
         ///
-        /// ⚠️ [STAGE2C] **索引 0 永远是 HQ**（`Hq` 字段指向同一个对象）。容量 4 是**含 HQ** 的，
+        /// ⚠️ [STAGE2C] **索引 0 永远是 HQ**（`Hq` 字段指向同一个对象）。容量 5 是**含 HQ** 的，
         /// 所以玩家最多再往这里放 **3 个**单位。这条"HQ 也占一格"是用户明确拍板的
         /// （2026-10-08），它让"铺场"与"保命"共享同一份空间，支援线不再是纯资源。
         ///
@@ -113,7 +113,7 @@ namespace KardsLike.Core
         public bool IsHandFull { get { return Hand.Count >= GameEngine.HandLimit; } }
 
         /// <summary>[STAGE2B] 支援阵线是否已满（满了就不能再部署单位卡）。
-        /// [STAGE2C] 注意 HQ 也占一格，所以"没满"时最多还能再放 3 个单位。</summary>
+        /// [STAGE2C] 注意 HQ 也占一格，所以"没满"时最多还能再放 4 个单位。</summary>
         public bool IsSupportLineFull { get { return SupportLine.Count >= GameEngine.SupportLineCapacity; } }
     }
 

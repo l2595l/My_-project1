@@ -45,9 +45,12 @@ namespace KardsLike.Core
         public const int FirstPlayerIndex = 0;
 
         /// <summary>[STAGE2B] 支援阵线容量：新单位唯一的落点，每人独占。见设计文档 §7.1。
-        /// [STAGE2C] 这个数字**含 HQ** —— HQ 固定占第 0 格，所以玩家最多再部署 3 个单位。
-        /// "HQ 也占一格"意味着铺场与保命共享同一份空间。</summary>
-        public const int SupportLineCapacity = 4;
+        /// [STAGE2C] 这个数字**含 HQ** —— HQ 固定占第 0 格，所以玩家最多再部署 4 个单位。
+        /// "HQ 也占一格"意味着铺场与保命共享同一份空间。
+        /// [阶段2.5 · 提交 B] 2026-10-08 由 **4 改回 Kards 口径的 5**（拍板项 ①）。
+        /// 理由：兵种系统让铺场更重要（多兵种协同需要更多格子承载），4 格时
+        /// "HQ + 3 个单位"会让火炮/战斗机这类支援型单位挤掉肉盾位。见设计文档 §10.4 / §10.6。</summary>
+        public const int SupportLineCapacity = 5;
 
         /// <summary>[STAGE2B] 前线容量：双方共用，同一时间只能被一方占领。见设计文档 §7.1。</summary>
         public const int FrontlineCapacity = 5;

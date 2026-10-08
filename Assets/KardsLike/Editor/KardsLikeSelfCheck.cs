@@ -646,7 +646,9 @@ namespace KardsLike.EditorTools
 
             // ---- 容量 ----
             // [STAGE2C] 支援线里已经有 HQ + mySupport 两个，这里一直加到"满"为止。
-            // 断言它恰好停在第 4 个（= 容量含 HQ），顺带验证了"HQ 占一格"这条新规则。
+            // 断言它恰好停在容量上限（含 HQ 的格数），顺带验证了"HQ 占一格"这条规则。
+            // ⚠️ 这里的期望值**不许写死数字** —— 容量是 `GameEngine.SupportLineCapacity`，
+            //    2026-10-08 提交 B 把它从 4 改成 5，写死会让报告说谎（见 §7.3 那两行的写法）。
             int fillGuard = 0;
             while (!st.Players[0].IsSupportLineFull && fillGuard++ < 12)
             {
@@ -684,7 +686,7 @@ namespace KardsLike.EditorTools
             sb.AppendLine("| 支援阵线放满 " + GameEngine.SupportLineCapacity + " 个后 IsSupportLineFull | " +
                           Mark(supportFull) + " |");
             sb.AppendLine("| **满格时恰好 " + GameEngine.SupportLineCapacity + " 个，且第 0 格是 HQ**" +
-                          "（HQ 占一格 ⇒ 除 HQ 外只能放 3 个） | " +
+                          "（HQ 占一格 ⇒ 除 HQ 外只能放 " + (GameEngine.SupportLineCapacity - 1) + " 个） | " +
                           Mark(hqTakesOneSlot) + "（实测 " + supportCount + " 个） |");
             sb.AppendLine("| 前线放满 " + GameEngine.FrontlineCapacity + " 个后无法再移入 | " +
                           Mark(frontlineFullBlocks) +

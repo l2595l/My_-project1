@@ -36,7 +36,7 @@ namespace KardsLike.Core
             }
             if (card.IsUnit && p.IsSupportLineFull)
             {
-                // [STAGE2B] 单位卡只能落在自己的支援阵线（4 格）；想上前线要另外执行「移动」。
+                // [STAGE2B] 单位卡只能落在自己的支援阵线（容量见 SupportLineCapacity）；想上前线要另外执行「移动」。
                 // 容量判定换线之后，"能不能部署"与"能不能移入前线"成了两个独立的问题，
                 // 所以不能再共用一个战场上限常量（旧的 MaxBoardSize = 7 已删除）。
                 reason = "支援阵线已满（上限 " + SupportLineCapacity + "）";
