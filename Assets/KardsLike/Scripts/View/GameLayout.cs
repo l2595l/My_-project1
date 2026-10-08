@@ -56,6 +56,17 @@ namespace KardsLike.View
         public RectTransform HandRow;
         public RectTransform EnemyHandBacks;
 
+        /// <summary>
+        /// [阶段2.5 · 任务C-①] 战斗反馈特效层。铺满整个设计画框，**不参与整批销毁**
+        /// （`Track()` 里没有它），所以卡牌每帧重建都不会打断正在播放的特效。
+        ///
+        /// 兄弟顺序：建在 `HandRow` 之后、倒计时与结算浮层之前 ——
+        /// 于是它压在卡牌之上、又被倒计时和结算浮层压住，正是想要的层次。
+        /// </summary>
+        public RectTransform EffectsLayer;
+        /// <summary>特效层的动画驱动组件（飘字 / 抖动 + 时长倍率）。</summary>
+        public CardEffectLayer Effects;
+
         public TextMeshProUGUI EnemyInfoText;
         public TextMeshProUGUI ResourceText;
         public TextMeshProUGUI ResourceSubText;
@@ -254,6 +265,13 @@ namespace KardsLike.View
 
             HandRow = UiKit.Anchored("HandRow", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                                      new Vector2(0f, 32f), new Vector2(1200f, 208f));
+
+            // ---- [阶段2.5 · 任务C-①] 战斗反馈特效层 ----
+            // 建在这里（而不是最后）是为了兄弟顺序：卡牌 → 特效 → 倒计时 → 结算浮层。
+            // 它**不进 Track()**，所以 Refresh 的 ClearSpawned 不会碰它 —— 这是
+            // "0.6 秒的飘字能跨越 AI 回合那 0.4 秒一次的整卡重建"的前提。
+            EffectsLayer = UiKit.Stretch("EffectsLayer", root, 0f);
+            Effects = EffectsLayer.gameObject.AddComponent<CardEffectLayer>();
 
             // ---- 回合倒计时（阶段 2 · 任务 A）----
             BuildTurnTimer(root);

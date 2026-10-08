@@ -28,7 +28,7 @@ namespace KardsLike.View
     ///     "界面永远等于状态"这条不变量 —— 增量更新一旦漏了一处，
     ///     就会出现"界面显示 5 血、实际已经死了"这类最难查的 bug。
     /// </summary>
-    public sealed class GamePresenter : MonoBehaviour
+    public sealed partial class GamePresenter : MonoBehaviour
     {
         /// <summary>
         /// 人类回合的时长上限（秒）。来自《阶段2-设计要点与启动提示词.md》§三。
@@ -92,6 +92,7 @@ namespace KardsLike.View
             _interaction = new GameInteraction(this);
 
             _layout.Build(_interaction);
+            ApplyAnimSpeed();
             NewGame(NewSeed());
         }
 
@@ -99,9 +100,11 @@ namespace KardsLike.View
         {
             _layout.UpdateDesignScale();
 
-            // 键盘快捷键：R 重开，T 切换倒计时，Esc 取消当前选择。都只是便利，不影响规则。
+            // 键盘快捷键：R 重开，T 切换倒计时，Y 切换动画倍率，Esc 取消当前选择。
+            // 都只是便利，不影响规则。
             if (Input.GetKeyDown(KeyCode.R)) { RestartGame(); return; }
             if (Input.GetKeyDown(KeyCode.T)) { ToggleTurnTimer(); }
+            if (Input.GetKeyDown(KeyCode.Y)) { CycleAnimSpeed(); }
             if (Input.GetKeyDown(KeyCode.Escape)) { _interaction.ClearSelection(); _interaction.Error = ""; Refresh(); }
 
             // 倒计时推进放在最后：它可能触发"超时自动结束回合"，
@@ -138,8 +141,26 @@ namespace KardsLike.View
             _ai = new GreedyAI(_engine);
             _engine.StartMatch();
 
+            // [阶段2.5 · 任务C-①] 伤害追踪与特效整体复位。
+            // 不复位会有一个很难查的假象：旧局场上那些单位在新局里"不存在"，
+            // 差值算法会把它们统统判成"这一次被打死了"，于是一重开就弹一片伤害数字。
+            ResetDamageTracking();
+            if (_layout.Effects != null) _layout.Effects.ClearAll();
+
             if (_layout.GameOverRoot != null) _layout.GameOverRoot.SetActive(false);
             Refresh();
+        }
+
+        /// <summary>[任务C-①] 把伤害追踪的全部中间状态清空，并把"基准快照"标记为未就绪。</summary>
+        private void ResetDamageTracking()
+        {
+            _hpPrev.Clear();
+            _hpCur.Clear();
+            _damagedIds.Clear();
+            _damageAmounts.Clear();
+            _preActionPos.Clear();
+            _unitRects.Clear();
+            _damageBaselineReady = false;
         }
 
         // ==================================================================
@@ -150,6 +171,16 @@ namespace KardsLike.View
         {
             if (_engine == null) return;
 
+            // ---- [阶段2.5 · 任务C-①] 战斗反馈的准备，两件都必须在 ClearSpawned() 之前 ----
+            // ① 把"动作发生前"每张单位卡的中心点算成坐标存下来。
+            //    必须现在做 —— 旧卡马上会被销毁，而"单位被打死"时飘字只能打在原来的位置上。
+            // ② 比较前后两帧的血量，得出这一帧发生了哪些伤害。
+            //    **不去推算规则**：引擎状态在动画开始前就已经改完了（硬约束 2「先结算、后播放」），
+            //    所以"谁掉了多少血"是读结果，不是重算规则。
+            CapturePreActionAnchors();
+            CollectDamageEvents();
+
+            _unitRects.Clear();
             _layout.ClearSpawned();
 
             GameState s = _engine.State;
@@ -181,7 +212,7 @@ namespace KardsLike.View
                 _layout.TurnOwnerText.text = myTurn ? "你的回合" : "电脑回合";
                 _layout.TurnOwnerText.color = myTurn ? UiKit.LegalColor : UiKit.TargetColor;
             }
-            _layout.SeedText.text = "随机种子 " + _seed;
+            UpdateSeedText();
 
             BuildEnemyHandBacks(foe);
             BuildSupportLineCards(_layout.EnemySupportRow, foe);
@@ -193,6 +224,10 @@ namespace KardsLike.View
             UpdateActionButtons();
             UpdateHint();
             UpdateLog(s);
+
+            // [阶段2.5 · 任务C-①] 版面上所有单位卡都建完了，这时才知道
+            // "哪些受伤的单位还活着（打在它现在的位置上）、哪些已经被打死（只能用旧位置）"。
+            PlayDamageFloats();
 
             // [STAGE2-TASK-A] 界面刷新之后同步倒计时的运行与可见性。
             // 放最后是因为它只依赖"当前回合是谁"，跟上面的展示逻辑互不干扰。
@@ -270,6 +305,8 @@ namespace KardsLike.View
                     showStatus: showStatus,
                     onClick: onClick);
 
+                // [任务C-①] 记下这张卡，伤害飘字要按它在版面中的实际位置来落点
+                _unitRects[u.InstanceId] = v.Rect;
                 _layout.Track(v.Rect.gameObject);
             }
         }
@@ -298,6 +335,8 @@ namespace KardsLike.View
                     showStatus: showStatus,
                     onClick: _interaction.OnBoardUnitClicked);
 
+                // [任务C-①] 同支援阵线：飘字要靠这个位置落点
+                _unitRects[u.InstanceId] = v.Rect;
                 _layout.Track(v.Rect.gameObject);
             }
         }
