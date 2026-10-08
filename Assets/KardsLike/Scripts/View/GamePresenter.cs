@@ -169,9 +169,11 @@ namespace KardsLike.View
             // ③ 比较前后两帧的**手牌**，得出这一帧被打出的牌（指令卡就去播动画）。
             //    同样只读状态：引擎里唯一会从手牌拿牌的地方是 PlayCard，
             //    而抽牌/爆牌只会往手牌加 —— 所以"手牌少了"等价于"打出了一张"。
+            // ④ 比较前后两帧的**单位战线**，得出这一帧移上前线的单位（要播滑动动画）。
             CapturePreActionAnchors();
             CollectDamageEvents();
             CollectOrderPlays();
+            CollectMoveEvents();
 
             _unitRects.Clear();
             _layout.ClearSpawned();
@@ -218,9 +220,11 @@ namespace KardsLike.View
             UpdateHint();
             UpdateLog(s);
 
-            // [阶段2.5 · 任务C-①] 版面上所有单位卡都建完了，这时才知道
-            // "哪些受伤的单位还活着（打在它现在的位置上）、哪些已经被打死（只能用旧位置）"。
+            // [阶段2.5 · 任务C] 版面上所有单位卡都建完了，这时才知道
+            // "哪些受伤的单位还活着（打在它现在的位置上）、哪些已经被打死（只能用旧位置）"，
+            // 以及"哪张卡要从前线/支援线的旧位置滑过来"。
             PlayDamageFloats();
+            PlayMoveSlides();
 
             // [STAGE2-TASK-A] 界面刷新之后同步倒计时的运行与可见性。
             // 放最后是因为它只依赖"当前回合是谁"，跟上面的展示逻辑互不干扰。

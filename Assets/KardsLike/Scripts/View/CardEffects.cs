@@ -30,6 +30,8 @@ namespace KardsLike.View
         public const float FloatBaseDuration = 0.6f;
         /// <summary>卡牌抖动时长。</summary>
         public const float ShakeBaseDuration = 0.15f;
+        /// <summary>[任务C-③] 单位移动（支援线 → 前线）的滑动时长。</summary>
+        public const float MoveBaseDuration = 0.25f;
         /// <summary>伤害数字上飘的距离（设计画框单位）。</summary>
         public const float FloatRise = 56f;
         /// <summary>抖动幅度（设计画框单位）。</summary>
@@ -113,6 +115,19 @@ namespace KardsLike.View
         }
 
         /// <summary>
+        /// [任务C-③] 让一张卡从"它原来所在的位置"平滑滑到它**现在的布局位置**。
+        ///
+        /// 为什么传世界坐标而不是"旧节点"：卡每次 `Refresh()` 都被整批重建，
+        /// 旧节点到这一步已经被销毁了 —— 只有**它当时的世界坐标**能留到重建之后用。
+        /// 新卡现在已经在正确的新位置上（布局算好的），这里先把它挪回起点再插值滑回去。
+        /// </summary>
+        public void SlideFrom(RectTransform card, Vector3 fromWorld)
+        {
+            if (!Enabled || card == null) return;
+            StartCoroutine(PlaySlide(card, fromWorld, MoveBaseDuration / _speed));
+        }
+
+        /// <summary>
         /// 把一个 RectTransform 的中心点换算成本层的局部坐标。
         /// **必须在目标还活着的时候调** —— 卡被销毁后算出来的位置不可靠。
         /// </summary>
@@ -123,10 +138,14 @@ namespace KardsLike.View
             Vector3[] corners = new Vector3[4];
             target.GetWorldCorners(corners);
             Vector3 center = (corners[0] + corners[2]) * 0.5f;
+            return LocalOf(center);
+        }
 
-            // 本层铺满 DesignFrame 且轴心在正中，所以换算出来的局部坐标
-            // 就等于"设计画框坐标"（原点在正中心）。
-            Vector3 local = transform.InverseTransformPoint(center);
+        /// <summary>世界坐标 → 本层局部坐标（本层铺满 DesignFrame 且轴心在正中，
+        /// 所以算出来就等于"设计画框坐标"）。</summary>
+        public Vector2 LocalOf(Vector3 world)
+        {
+            Vector3 local = transform.InverseTransformPoint(world);
             return new Vector2(local.x, local.y);
         }
 
@@ -230,6 +249,39 @@ namespace KardsLike.View
             }
 
             if (card != null) card.anchoredPosition = basePos;
+        }
+
+        /// <summary>
+        /// 滑动：把新卡从"旧的世界坐标"平滑移到它的布局位置（`SmoothStep`，两端都软）。
+        ///
+        /// 两个坐标系必须换算：旧位置在**旧行**里、目标位置在**新行**里（支援线 → 前线换了父节点），
+        /// 所以先把旧的世界坐标用 `parent.InverseTransformPoint` 换算成新父节点下的局部坐标。
+        /// 卡节点的轴心与锚点都是 (0.5,0.5) ⇒ 换算结果正好就是 `anchoredPosition`。
+        /// </summary>
+        private IEnumerator PlaySlide(RectTransform card, Vector3 fromWorld, float duration)
+        {
+            if (duration <= 0f) yield break;
+
+            Transform parent = card.parent;
+            if (parent == null) yield break;
+
+            Vector2 to = card.anchoredPosition;            // 布局已经把它放在终点了，先记下来
+            Vector3 localFrom = parent.InverseTransformPoint(fromWorld);
+            Vector2 from = new Vector2(localFrom.x, localFrom.y);
+
+            // 立刻挪回起点 —— 不这么做的话会先闪一帧在终点上
+            card.anchoredPosition = from;
+
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                if (card == null) yield break;             // 中途被重建了就算了
+                card.anchoredPosition = Vector2.Lerp(from, to, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration)));
+                yield return null;
+            }
+
+            if (card != null) card.anchoredPosition = to;
         }
 
         /// <summary>

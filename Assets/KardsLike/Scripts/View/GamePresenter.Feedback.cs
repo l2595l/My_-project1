@@ -62,9 +62,15 @@ namespace KardsLike.View
         private readonly List<int> _damageAmounts = new List<int>();
 
         /// <summary>
-        /// 帧首记下的"动作发生前"每个单位卡的中心点（特效层局部坐标）。
-        /// 单位被打死时，卡会从版面上消失 —— 飘字只能打在它**原来**的位置上，
-        /// 所以必须在旧卡被销毁之前把坐标算出来存好。
+        /// 帧首记下的"动作发生前"每个单位卡的**设计画框坐标**（特效层局部坐标）。
+        /// 两个地方要用它，都必须赶在旧卡被销毁之前算好：
+        ///   · 单位被打死 ⇒ 飘字只能打在它**原来**的位置上
+        ///   · 单位移上前线 ⇒ 新卡要**从旧位置滑过去**（旧节点那时已经没了，只剩坐标）
+        ///
+        /// ⚠️ 存"设计坐标"而不是"世界坐标"：世界坐标会把**当时的设计缩放**一起冻进去，
+        /// 而消化的那一刻可能已经是另一个缩放（窗口/Game 视图一改就会变）——
+        /// 那样换算出来的起点会带上百分之几的误差。存设计坐标，用时才在同一帧里换算，
+        /// 缩放自然约掉，起点是精确的。
         /// </summary>
         private readonly Dictionary<int, Vector2> _preActionPos = new Dictionary<int, Vector2>();
 
@@ -144,6 +150,12 @@ namespace KardsLike.View
             _handPrev.Clear();
             _handCur.Clear();
             _orderBaselineReady = false;
+
+            // 单位移动追踪（任务 C 步骤③）
+            _linePrev.Clear();
+            _lineCur.Clear();
+            _movedIds.Clear();
+            _moveBaselineReady = false;
         }
 
         // ==================================================================
@@ -231,7 +243,7 @@ namespace KardsLike.View
             foreach (KeyValuePair<int, RectTransform> kv in _unitRects)
             {
                 if (kv.Value == null) continue;
-                _preActionPos[kv.Key] = _layout.Effects.LocalOf(kv.Value);
+                _preActionPos[kv.Key] = _layout.Effects.LocalOf(kv.Value);   // 设计画框坐标
             }
         }
 
@@ -262,6 +274,21 @@ namespace KardsLike.View
                 if (_preActionPos.TryGetValue(id, out fallback)) fx.DamageAt(fallback, amount);
             }
         }
+
+        // ==================================================================
+        // [阶段2.5 · 任务C-③] 单位移动动画：数据来源
+        //
+        // 还是同一个套路 —— 读引擎改完的状态。这次读的是**单位所在战线**：
+        // `UnitInstance.Line` 只有"支援线 → 前线"这一个方向（单位不能退回），
+        // 所以"上一帧在支援线、这一帧在前线"就等价于"刚刚移上前线"。
+        // ==================================================================
+
+        /// <summary>上一帧每个单位所在的战线（0 = 支援线，1 = 前线）。</summary>
+        private Dictionary<int, int> _linePrev = new Dictionary<int, int>();
+        private Dictionary<int, int> _lineCur = new Dictionary<int, int>();
+        private readonly List<int> _movedIds = new List<int>();
+        private bool _moveBaselineReady;
+
 
         /// <summary>
         /// [任务C-②] 比较前后两帧的手牌，得出这一帧"被打出的牌"，指令卡就去播动画。
@@ -313,6 +340,74 @@ namespace KardsLike.View
             Dictionary<CardDef, int> swap = _handPrev;
             _handPrev = _handCur;
             _handCur = swap;
+        }
+
+        /// <summary>把场上每个单位所在的战线写进快照（含 HQ，它永远在支援线）。</summary>
+        private static void SnapshotLines(GameState s, Dictionary<int, int> dst)
+        {
+            dst.Clear();
+
+            List<UnitInstance> front = s.Frontline;
+            for (int i = 0; i < front.Count; i++) dst[front[i].InstanceId] = (int)front[i].Line;
+
+            for (int p = 0; p < s.Players.Length; p++)
+            {
+                List<UnitInstance> sup = s.Players[p].SupportLine;
+                for (int i = 0; i < sup.Count; i++) dst[sup[i].InstanceId] = (int)sup[i].Line;
+            }
+        }
+
+        /// <summary>
+        /// [任务C-③] 比较前后两帧的单位战线，得出"这一帧移上前线"的单位。
+        /// 只收 **支援线 → 前线** 这一个方向（反向不存在），所以判据就是"值变大了"。
+        /// </summary>
+        private void CollectMoveEvents()
+        {
+            SnapshotLines(_engine.State, _lineCur);
+
+            _movedIds.Clear();
+
+            if (!_moveBaselineReady)
+            {
+                _moveBaselineReady = true;
+            }
+            else
+            {
+                foreach (KeyValuePair<int, int> kv in _lineCur)
+                {
+                    int before;
+                    if (!_linePrev.TryGetValue(kv.Key, out before)) continue;   // 这一帧新上场的
+                    if (kv.Value > before) _movedIds.Add(kv.Key);
+                }
+            }
+
+            Dictionary<int, int> swap = _linePrev;
+            _linePrev = _lineCur;
+            _lineCur = swap;
+        }
+
+        /// <summary>
+        /// [任务C-③] 播放移动动画：把新卡挪回它**动作发生前的位置**，再平滑滑到布局位置。
+        /// 必须在版面重建**之后**调 —— 那时才有卡节点、也才知道终点在哪。
+        /// </summary>
+        private void PlayMoveSlides()
+        {
+            CardEffectLayer fx = _layout.Effects;
+            if (fx == null || _movedIds.Count == 0) return;
+
+            for (int i = 0; i < _movedIds.Count; i++)
+            {
+                RectTransform rt;
+                if (!_unitRects.TryGetValue(_movedIds[i], out rt) || rt == null) continue;
+
+                Vector2 design;
+                if (!_preActionPos.TryGetValue(_movedIds[i], out design)) continue;
+
+                // 设计坐标 → 世界坐标 →（由 SlideFrom 转到新父节点下）。
+                // 两步都在**同一帧**里做，缩放自然约掉，起点是精确的。
+                Vector3 world = fx.transform.TransformPoint(new Vector3(design.x, design.y, 0f));
+                fx.SlideFrom(rt, world);
+            }
         }
     }
 }
