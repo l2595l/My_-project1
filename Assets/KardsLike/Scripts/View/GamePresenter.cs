@@ -169,11 +169,12 @@ namespace KardsLike.View
             // ③ 比较前后两帧的**手牌**，得出这一帧被打出的牌（指令卡就去播动画）。
             //    同样只读状态：引擎里唯一会从手牌拿牌的地方是 PlayCard，
             //    而抽牌/爆牌只会往手牌加 —— 所以"手牌少了"等价于"打出了一张"。
-            // ④ 比较前后两帧的**单位战线**，得出这一帧移上前线的单位（要播滑动动画）。
+            // ④ 比较前后两帧的**单位战线 + 本回合是否已行动**，得出这一帧
+            //    移上前线的单位（要播滑动）与发动攻击的单位（要播突刺）。
             CapturePreActionAnchors();
             CollectDamageEvents();
             CollectOrderPlays();
-            CollectMoveEvents();
+            CollectUnitActionEvents();
 
             _unitRects.Clear();
             _layout.ClearSpawned();
@@ -222,7 +223,15 @@ namespace KardsLike.View
 
             // [阶段2.5 · 任务C] 版面上所有单位卡都建完了，这时才知道
             // "哪些受伤的单位还活着（打在它现在的位置上）、哪些已经被打死（只能用旧位置）"，
-            // 以及"哪张卡要从前线/支援线的旧位置滑过来"。
+            // 以及"哪张卡要从前线/支援线的旧位置滑过来""哪张卡要朝目标突刺"。
+            //
+            // ⚠️ 顺序有意义：**突刺必须排在伤害反馈之前**。
+            //    飘字会给受伤的卡加抖动、抖动改的正是 anchoredPosition；
+            //    突刺要读"目标现在在哪"，若排在抖动之后，读到的就是**被抖动推过**的位置 ——
+            //    实测目标点会偏 6 设计像素、突刺多走 4.5%。
+            //    排在前面时两者都读到干净的布局位置，且突刺的卡本身不会再被抖动
+            //    （`PlayDamageFloats` 里对 `IsAttackingThisFrame` 的卡跳过抖动）。
+            PlayAttackLunges();
             PlayDamageFloats();
             PlayMoveSlides();
 

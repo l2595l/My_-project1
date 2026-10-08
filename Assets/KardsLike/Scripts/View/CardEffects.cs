@@ -32,6 +32,10 @@ namespace KardsLike.View
         public const float ShakeBaseDuration = 0.15f;
         /// <summary>[任务C-③] 单位移动（支援线 → 前线）的滑动时长。</summary>
         public const float MoveBaseDuration = 0.25f;
+        /// <summary>[任务C-④] 攻击"突刺"的总时长（去+回各一半）。</summary>
+        public const float AttackBaseDuration = 0.2f;
+        /// <summary>突刺时最多走完"到目标"的百分之多少 —— 不走满，否则两张卡会叠在一起。</summary>
+        public const float LungeApproach = 0.35f;
         /// <summary>伤害数字上飘的距离（设计画框单位）。</summary>
         public const float FloatRise = 56f;
         /// <summary>抖动幅度（设计画框单位）。</summary>
@@ -125,6 +129,19 @@ namespace KardsLike.View
         {
             if (!Enabled || card == null) return;
             StartCoroutine(PlaySlide(card, fromWorld, MoveBaseDuration / _speed));
+        }
+
+        /// <summary>
+        /// [任务C-④] 攻击突刺：卡朝目标冲一段再弹回原位（总长约 0.2s）。
+        ///
+        /// 提示词 4 的 ④ 要求"**先做统一版**，再按兵种细化"，这就是那个统一版：
+        /// 五个兵种共用同一段位移动画，看得出"谁打了谁"即可。
+        /// 参数给的是**目标的世界坐标**，因为目标可能已经被打死、节点不在了。
+        /// </summary>
+        public void Lunge(RectTransform card, Vector3 targetWorld)
+        {
+            if (!Enabled || card == null) return;
+            StartCoroutine(PlayLunge(card, targetWorld, AttackBaseDuration / _speed));
         }
 
         /// <summary>
@@ -289,6 +306,47 @@ namespace KardsLike.View
             }
 
             if (card != null) card.anchoredPosition = to;
+        }
+
+        /// <summary>
+        /// 突刺：朝目标走一段（`LungeApproach` × 到目标的距离）再原路弹回，**结束时精确还原**。
+        ///
+        /// 两个自制的硬规矩：
+        ///   · 只走一部分，**不能真的走到目标身上** —— 否则两张卡会重叠成一坨
+        ///   · 去与回各占一半时长，都用 `SmoothStep`，收尾都软 ⇒ 像"刺一下"而不是"平移"。
+        ///     回程结束时必须回到 `home`：位置是布局给的，不还原就等于改了布局。
+        /// </summary>
+        private IEnumerator PlayLunge(RectTransform card, Vector3 targetWorld, float duration)
+        {
+            if (duration <= 0f) yield break;
+
+            Transform parent = card.parent;
+            if (parent == null) yield break;
+
+            Vector2 home = card.anchoredPosition;
+            Vector3 localTarget = parent.InverseTransformPoint(targetWorld);
+            Vector2 lungeTo = Vector2.Lerp(home, new Vector2(localTarget.x, localTarget.y), LungeApproach);
+
+            float half = duration * 0.5f;
+            float t = 0f;
+            while (t < half)          // 去
+            {
+                t += Time.deltaTime;
+                if (card == null) yield break;
+                card.anchoredPosition = Vector2.Lerp(home, lungeTo, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / half)));
+                yield return null;
+            }
+
+            t = 0f;
+            while (t < half)          // 回
+            {
+                t += Time.deltaTime;
+                if (card == null) yield break;
+                card.anchoredPosition = Vector2.Lerp(lungeTo, home, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / half)));
+                yield return null;
+            }
+
+            if (card != null) card.anchoredPosition = home;
         }
 
         /// <summary>

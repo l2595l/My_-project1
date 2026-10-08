@@ -154,11 +154,14 @@ namespace KardsLike.View
             _handCur.Clear();
             _orderBaselineReady = false;
 
-            // 单位移动追踪（任务 C 步骤③）
+            // 单位移动 / 攻击追踪（任务 C 步骤③④）
             _linePrev.Clear();
             _lineCur.Clear();
+            _operatedPrev.Clear();
+            _operatedCur.Clear();
             _movedIds.Clear();
-            _moveBaselineReady = false;
+            _attackedIds.Clear();
+            _actionBaselineReady = false;
         }
 
         // ==================================================================
@@ -268,7 +271,9 @@ namespace KardsLike.View
                 if (_unitRects.TryGetValue(id, out rt) && rt != null)
                 {
                     fx.DamageAt(fx.LocalOf(rt), amount);
-                    fx.Shake(rt);
+                    // [任务C-④] 正在突刺的那张卡不再抖动 —— 两者都写 anchoredPosition，
+                    // 一起跑会互相覆盖（表现为卡在原地抽搐）。突刺本身已经表达了"它攻击了"。
+                    if (!IsAttackingThisFrame(id)) fx.Shake(rt);
                     continue;
                 }
 
@@ -286,11 +291,14 @@ namespace KardsLike.View
         // 所以"上一帧在支援线、这一帧在前线"就等价于"刚刚移上前线"。
         // ==================================================================
 
-        /// <summary>上一帧每个单位所在的战线（0 = 支援线，1 = 前线）。</summary>
+        /// <summary>上一帧每个单位所在的战线（0 = 支援线，1 = 前线）与"本回合是否已行动"。</summary>
         private Dictionary<int, int> _linePrev = new Dictionary<int, int>();
         private Dictionary<int, int> _lineCur = new Dictionary<int, int>();
+        private Dictionary<int, bool> _operatedPrev = new Dictionary<int, bool>();
+        private Dictionary<int, bool> _operatedCur = new Dictionary<int, bool>();
         private readonly List<int> _movedIds = new List<int>();
-        private bool _moveBaselineReady;
+        private readonly List<int> _attackedIds = new List<int>();
+        private bool _actionBaselineReady;
 
 
         /// <summary>
@@ -345,34 +353,57 @@ namespace KardsLike.View
             _handCur = swap;
         }
 
-        /// <summary>把场上每个单位所在的战线写进快照（含 HQ，它永远在支援线）。</summary>
-        private static void SnapshotLines(GameState s, Dictionary<int, int> dst)
+        /// <summary>
+        /// 把场上每个单位（含 HQ）的"所在战线 + 本回合是否已行动"一次写进两份快照。
+        ///
+        /// 两者一次采完，是为了让下面的事件判定**不依赖调用顺序** ——
+        /// "刚行动过、但没换战线"这条判据要同时用到两个快照，
+        /// 如果分成两个方法各自交换快照，前一个跑完就把"上一帧"覆盖掉了。
+        /// </summary>
+        private static void SnapshotUnitActions(GameState s,
+                                               Dictionary<int, int> lines,
+                                               Dictionary<int, bool> operated)
         {
-            dst.Clear();
+            lines.Clear();
+            operated.Clear();
 
             List<UnitInstance> front = s.Frontline;
-            for (int i = 0; i < front.Count; i++) dst[front[i].InstanceId] = (int)front[i].Line;
+            for (int i = 0; i < front.Count; i++)
+            {
+                lines[front[i].InstanceId] = (int)front[i].Line;
+                operated[front[i].InstanceId] = front[i].HasOperatedThisTurn;
+            }
 
             for (int p = 0; p < s.Players.Length; p++)
             {
                 List<UnitInstance> sup = s.Players[p].SupportLine;
-                for (int i = 0; i < sup.Count; i++) dst[sup[i].InstanceId] = (int)sup[i].Line;
+                for (int i = 0; i < sup.Count; i++)
+                {
+                    lines[sup[i].InstanceId] = (int)sup[i].Line;
+                    operated[sup[i].InstanceId] = sup[i].HasOperatedThisTurn;
+                }
             }
         }
 
         /// <summary>
-        /// [任务C-③] 比较前后两帧的单位战线，得出"这一帧移上前线"的单位。
-        /// 只收 **支援线 → 前线** 这一个方向（反向不存在），所以判据就是"值变大了"。
+        /// [任务C-③④] 比较前后两帧，得出这一帧"移上前线"与"发动攻击"的单位。
+        ///
+        /// 移动的判据：`Line` 从支援线变成前线（引擎里只有这一个方向，值变大即移动）。
+        /// 攻击的判据：**本回合"已行动"标志从 false 变 true，且它不是移动** ——
+        ///   引擎里只有两个地方会置这个标志：`MoveUnit` 与 `AttackWithUnit`
+        ///   （"移动与攻击共用每回合一次机会"），所以"刚动过"减去"动了位置"剩下的就是攻击。
+        ///   这样连"谁攻击了"都不用问引擎要，更不用去解析日志。
         /// </summary>
-        private void CollectMoveEvents()
+        private void CollectUnitActionEvents()
         {
-            SnapshotLines(_engine.State, _lineCur);
+            SnapshotUnitActions(_engine.State, _lineCur, _operatedCur);
 
             _movedIds.Clear();
+            _attackedIds.Clear();
 
-            if (!_moveBaselineReady)
+            if (!_actionBaselineReady)
             {
-                _moveBaselineReady = true;
+                _actionBaselineReady = true;
             }
             else
             {
@@ -382,11 +413,25 @@ namespace KardsLike.View
                     if (!_linePrev.TryGetValue(kv.Key, out before)) continue;   // 这一帧新上场的
                     if (kv.Value > before) _movedIds.Add(kv.Key);
                 }
+
+                foreach (KeyValuePair<int, bool> kv in _operatedCur)
+                {
+                    if (!kv.Value) continue;                                    // 这一帧它还没行动
+                    bool before;
+                    if (!_operatedPrev.TryGetValue(kv.Key, out before)) continue;   // 这一帧新上场的
+                    if (before) continue;                                       // 之前就动过了
+                    if (_movedIds.Contains(kv.Key)) continue;                   // 换了战线 ⇒ 是移动
+                    _attackedIds.Add(kv.Key);
+                }
             }
 
-            Dictionary<int, int> swap = _linePrev;
+            Dictionary<int, int> ls = _linePrev;
             _linePrev = _lineCur;
-            _lineCur = swap;
+            _lineCur = ls;
+
+            Dictionary<int, bool> os = _operatedPrev;
+            _operatedPrev = _operatedCur;
+            _operatedCur = os;
         }
 
         /// <summary>
@@ -411,6 +456,64 @@ namespace KardsLike.View
                 Vector3 world = fx.transform.TransformPoint(new Vector3(design.x, design.y, 0f));
                 fx.SlideFrom(rt, world);
             }
+        }
+
+        /// <summary>
+        /// [任务C-④] 播放攻击突刺（统一版）：攻击者朝目标方向冲一段再弹回。
+        /// 同样必须在版面重建**之后**调。
+        /// </summary>
+        private void PlayAttackLunges()
+        {
+            CardEffectLayer fx = _layout.Effects;
+            if (fx == null || _attackedIds.Count == 0) return;
+
+            for (int i = 0; i < _attackedIds.Count; i++)
+            {
+                RectTransform rt;
+                if (!_unitRects.TryGetValue(_attackedIds[i], out rt) || rt == null) continue;
+
+                Vector2 targetDesign;
+                if (!TryFindAttackTargetDesign(_attackedIds[i], out targetDesign)) continue;
+
+                Vector3 targetWorld = fx.transform.TransformPoint(new Vector3(targetDesign.x, targetDesign.y, 0f));
+                fx.Lunge(rt, targetWorld);
+            }
+        }
+
+        /// <summary>
+        /// 本帧掉血的单位里、除攻击者自己以外的那个，就是它的攻击目标。
+        /// 还活着就用它现在的位置；已经阵亡就用帧首存下的旧位置。
+        /// 找不到（例如攻击被引擎拒绝、没有产生任何伤害）时返回 false，**不播突刺**。
+        /// </summary>
+        private bool TryFindAttackTargetDesign(int attackerId, out Vector2 design)
+        {
+            design = Vector2.zero;
+            CardEffectLayer fx = _layout.Effects;
+
+            for (int i = 0; i < _damagedIds.Count; i++)
+            {
+                int id = _damagedIds[i];
+                if (id == attackerId) continue;         // 自己挨的反击不算"目标"
+
+                RectTransform rt;
+                if (_unitRects.TryGetValue(id, out rt) && rt != null)
+                {
+                    design = fx.LocalOf(rt);
+                    return true;
+                }
+                if (_preActionPos.TryGetValue(id, out design)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>这一帧它是不是"正在攻击"（用来让突刺与抖动互不打架）。</summary>
+        private bool IsAttackingThisFrame(int unitId)
+        {
+            for (int i = 0; i < _attackedIds.Count; i++)
+            {
+                if (_attackedIds[i] == unitId) return true;
+            }
+            return false;
         }
     }
 }
