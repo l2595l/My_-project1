@@ -72,6 +72,23 @@ namespace KardsLike.View
         private readonly Dictionary<int, RectTransform> _unitRects = new Dictionary<int, RectTransform>();
 
         // ==================================================================
+        // [阶段2.5 · 任务C-②] 指令卡打出动画：数据来源
+        //
+        // 同样是"读引擎改完的状态"，不重算规则 —— 这次读的是**手牌**。
+        // 引擎里唯一会从手牌拿走一张牌的地方是 `PlayCard` 的 `Hand.RemoveAt`；
+        // 抽牌（含满手爆牌）只会往手牌里**加**（爆牌是"抽到就丢掉"，手牌不变）。
+        // ⇒ **手牌少了一张 = 打出了一张牌**，再看它 IsOrder 就知道要不要播动画。
+        //
+        // 为什么不用"弃牌堆变长"来判断：弃牌堆同时也会收到**爆牌**丢掉的那张，
+        // 那张根本没被打出过 —— 用它判断会偶尔凭空播一张牌。手牌差值没有这个歧义。
+        // ==================================================================
+
+        /// <summary>上一帧两个玩家手牌的并集（按 CardDef 引用计数）。</summary>
+        private Dictionary<CardDef, int> _handPrev = new Dictionary<CardDef, int>();
+        private Dictionary<CardDef, int> _handCur = new Dictionary<CardDef, int>();
+        private bool _orderBaselineReady;
+
+        // ==================================================================
         // [阶段2.5 · 任务C-①] 动画倍率开关（Y 键循环：×1 → ×0.5 → ×0.25 → 关闭）
         // ==================================================================
 
@@ -103,6 +120,30 @@ namespace KardsLike.View
             ApplyAnimSpeed();
             Debug.Log("[AnimSpeed] 动画倍率 → ×" + AnimSpeedLabel(CurrentAnimSpeed) +
                       "（Y 键继续切换；0 = 关闭动画、立即完成）");
+        }
+
+        /// <summary>
+        /// 把战斗反馈的全部中间状态清空，并把两个"基准快照"都标记为未就绪。
+        ///
+        /// 职责上刻意跟着**字段**走：反馈状态住在这个 partial 里，复位也就住在这里。
+        /// 漏掉任何一个标志的后果都是"重开一局时弹出一片不存在的伤害数字/动画" ——
+        /// 因为旧局的单位与手牌在新局里统统"消失"了，差值算法会把它们全判成刚刚发生。
+        /// </summary>
+        private void ResetFeedbackTracking()
+        {
+            // 伤害追踪（任务 C 步骤①）
+            _hpPrev.Clear();
+            _hpCur.Clear();
+            _damagedIds.Clear();
+            _damageAmounts.Clear();
+            _preActionPos.Clear();
+            _unitRects.Clear();
+            _damageBaselineReady = false;
+
+            // 指令卡打出追踪（任务 C 步骤②）
+            _handPrev.Clear();
+            _handCur.Clear();
+            _orderBaselineReady = false;
         }
 
         // ==================================================================
@@ -220,6 +261,58 @@ namespace KardsLike.View
                 Vector2 fallback;
                 if (_preActionPos.TryGetValue(id, out fallback)) fx.DamageAt(fallback, amount);
             }
+        }
+
+        /// <summary>
+        /// [任务C-②] 比较前后两帧的手牌，得出这一帧"被打出的牌"，指令卡就去播动画。
+        /// 判据只有一条：**上一帧还有、这一帧少了的牌**（见本节顶部的注释）。
+        /// </summary>
+        private void CollectOrderPlays()
+        {
+            CardEffectLayer fx = _layout.Effects;
+            if (fx == null) return;
+
+            GameState s = _engine.State;
+
+            _handCur.Clear();
+            for (int p = 0; p < s.Players.Length; p++)
+            {
+                List<CardDef> hand = s.Players[p].Hand;
+                for (int i = 0; i < hand.Count; i++)
+                {
+                    CardDef d = hand[i];
+                    if (d == null) continue;
+                    int n;
+                    _handCur.TryGetValue(d, out n);
+                    _handCur[d] = n + 1;
+                }
+            }
+
+            if (_orderBaselineReady)
+            {
+                foreach (KeyValuePair<CardDef, int> kv in _handPrev)
+                {
+                    int now;
+                    _handCur.TryGetValue(kv.Key, out now);
+                    int lost = kv.Value - now;
+                    if (lost <= 0) continue;
+
+                    // 同一张卡在一帧里被打出多张（只在脚本驱动下可能）就播几张
+                    for (int k = 0; k < lost; k++)
+                    {
+                        if (kv.Key.IsOrder) fx.ShowOrderCard(kv.Key);
+                    }
+                }
+            }
+            else
+            {
+                _orderBaselineReady = true;
+            }
+
+            // 交换：这一帧的手牌成为下一帧的"上一帧"
+            Dictionary<CardDef, int> swap = _handPrev;
+            _handPrev = _handCur;
+            _handCur = swap;
         }
     }
 }

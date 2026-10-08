@@ -144,23 +144,12 @@ namespace KardsLike.View
             // [阶段2.5 · 任务C-①] 伤害追踪与特效整体复位。
             // 不复位会有一个很难查的假象：旧局场上那些单位在新局里"不存在"，
             // 差值算法会把它们统统判成"这一次被打死了"，于是一重开就弹一片伤害数字。
-            ResetDamageTracking();
+            // 定义在 GamePresenter.Feedback.cs（反馈状态与它的复位放在一起）。
+            ResetFeedbackTracking();
             if (_layout.Effects != null) _layout.Effects.ClearAll();
 
             if (_layout.GameOverRoot != null) _layout.GameOverRoot.SetActive(false);
             Refresh();
-        }
-
-        /// <summary>[任务C-①] 把伤害追踪的全部中间状态清空，并把"基准快照"标记为未就绪。</summary>
-        private void ResetDamageTracking()
-        {
-            _hpPrev.Clear();
-            _hpCur.Clear();
-            _damagedIds.Clear();
-            _damageAmounts.Clear();
-            _preActionPos.Clear();
-            _unitRects.Clear();
-            _damageBaselineReady = false;
         }
 
         // ==================================================================
@@ -171,14 +160,18 @@ namespace KardsLike.View
         {
             if (_engine == null) return;
 
-            // ---- [阶段2.5 · 任务C-①] 战斗反馈的准备，两件都必须在 ClearSpawned() 之前 ----
+            // ---- [阶段2.5 · 任务C] 战斗反馈的准备，三件都必须在 ClearSpawned() 之前 ----
             // ① 把"动作发生前"每张单位卡的中心点算成坐标存下来。
             //    必须现在做 —— 旧卡马上会被销毁，而"单位被打死"时飘字只能打在原来的位置上。
             // ② 比较前后两帧的血量，得出这一帧发生了哪些伤害。
             //    **不去推算规则**：引擎状态在动画开始前就已经改完了（硬约束 2「先结算、后播放」），
             //    所以"谁掉了多少血"是读结果，不是重算规则。
+            // ③ 比较前后两帧的**手牌**，得出这一帧被打出的牌（指令卡就去播动画）。
+            //    同样只读状态：引擎里唯一会从手牌拿牌的地方是 PlayCard，
+            //    而抽牌/爆牌只会往手牌加 —— 所以"手牌少了"等价于"打出了一张"。
             CapturePreActionAnchors();
             CollectDamageEvents();
+            CollectOrderPlays();
 
             _unitRects.Clear();
             _layout.ClearSpawned();
