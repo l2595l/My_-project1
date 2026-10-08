@@ -152,7 +152,7 @@ namespace KardsLike.Core
         ///   · HalfTurn = 3 → 第 2 轮的你
         ///   要展示给人看，请用 RoundNumber（= (HalfTurn + 1) / 2），不要直接用这个字段。
         ///
-        /// 之所以保留半回合这个粒度，是因为 L3 回合上限（MaxTurns = 50）是按它计数的，
+        /// 之所以保留半回合这个粒度，是因为 L3 回合上限（`GameEngine.MaxTurns`）是按它计数的，
         /// 换粒度会改变对局长度 —— 本次修复的硬约束是"不改对局长度"。
         /// </summary>
         public int HalfTurn;

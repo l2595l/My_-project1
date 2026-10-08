@@ -196,7 +196,8 @@ namespace KardsLike.EditorTools
             sb.AppendLine("## 第 2 项 · 资源上限（设计文档 §2.5 / §6.5）");
             sb.AppendLine();
             sb.AppendLine("连续推进己方回合（双方都不出牌，只结束回合），记录每个己方回合开始时的资源。");
-            sb.AppendLine("推进到第 " + observed.Count + " 个己方回合（牌库 36 张、每个己方回合抽 1，" +
+            sb.AppendLine("推进到第 " + observed.Count + " 个己方回合（牌库 " +
+                          (CardDb.Cards.Length * GameEngine.DeckCopiesPerCard) + " 张、每个己方回合抽 1，" +
                           "22 个己方回合远未抽空，所以这一项不会被疲劳结算干扰）。");
             sb.AppendLine();
             sb.AppendLine("| 己方回合 | 资源 | 期望 |");
@@ -896,20 +897,23 @@ namespace KardsLike.EditorTools
         }
 
         // ==================================================================
-        // 第 9 项 · 兵种反击例外（[阶段2.5 · 任务 A] 新增）
+        // 第 9 项 · 兵种反击例外（[阶段2.5 · 任务 A] 新增；[提交 C] 补"轰炸机打战斗机"例外）
         // ==================================================================
 
         private static string RunUnitTypeCounterRules(out bool ok, out string title)
         {
-            title = "兵种反击例外：火炮/轰炸机免反击、轰炸机不还手、战斗机与步兵坦克正常双向结算";
+            title = "兵种反击例外：火炮免承受、轰炸机免承受且不还手（打战斗机除外）、战斗机与步兵坦克正常双向";
             ok = false;
 
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("## 第 9 项 · 兵种反击例外（设计文档 §10.2）");
+            sb.AppendLine("## 第 9 项 · 兵种反击例外（设计文档 §10.2 / §12.2）");
             sb.AppendLine();
             sb.AppendLine("### 9.0 为什么必须手工摆棋盘");
             sb.AppendLine();
-            sb.AppendLine("这三条规则在随机对局里触发概率极低 —— 池内只有 **1 张火炮、0 张战斗机、0 张轰炸机**，");
+            sb.AppendLine("这些规则在随机对局里触发概率极低 —— 池内只有 **" +
+                          CardDb.CountUnitsOfKind(UnitType.Artillery) + " 张火炮、" +
+                          CardDb.CountUnitsOfKind(UnitType.Fighter) + " 张战斗机、" +
+                          CardDb.CountUnitsOfKind(UnitType.Bomber) + " 张轰炸机**，");
             sb.AppendLine("靠 200 局抽样等于没测。所以下面每条规则都用**独立构造的一局**来断言。");
             sb.AppendLine();
             sb.AppendLine("⚠️ **期望值全部硬编码。** 绝不调用 `CounterDamage` 去算期望值 —— 那是循环论证，");
@@ -918,9 +922,10 @@ namespace KardsLike.EditorTools
             sb.AppendLine("夹具：清空双方手牌与牌库（本项不推进回合，所以不会触发疲劳）、资源给 99（让行动费闸门不参与）；");
             sb.AppendLine("攻击者放在**我方支援阵线**，目标放在**敌方前线**（支援线单位唯一够得着的敌人）。");
             sb.AppendLine();
-            sb.AppendLine("> 战斗机 / 轰炸机本轮**还没进卡池**（拍板项 ③ 排在下一轮），但规则必须现在就验 ——");
-            sb.AppendLine("> 否则等卡进池时才发现规则写错，200 局的归因会混在一起。");
-            sb.AppendLine("> 它们的 `CardDef` 是本文件的**局部夹具**，不放进 `CardDb.Cards`，所以不会进牌库、不影响任何真实对局。");
+            sb.AppendLine("> [阶段2.5 · 提交 C] 起战斗机 / 轰炸机**已经进卡池**，但本项仍用**局部夹具**");
+            sb.AppendLine("> `_test_fighter`(3费4/3) / `_test_bomber`(4费4/5)，**不**直接取池内实体：");
+            sb.AppendLine("> 下表的「期望掉血」是**硬编码**的，用池内实体的话，以后每调一次卡面数值都要回来改期望值。");
+            sb.AppendLine("> 夹具不放进 `CardDb.Cards`，所以不会进牌库、不影响任何真实对局。");
             sb.AppendLine();
 
             CardDef fighter = new CardDef("_test_fighter", "战斗机(测试)", 3, 2,
@@ -934,6 +939,9 @@ namespace KardsLike.EditorTools
             CardDef howitzer = CardDb.Get("unit_howitzer"); // 火炮 6/5
 
             // ---- 9.1 单位互攻的反击矩阵 ----
+            // ⚠️ 后三条是 [阶段2.5 · 提交 C] 新增，专门锁定「轰炸机打战斗机」这条例外的**方向**：
+            //   第 9 条是例外本身；第 8 / 10 条是对照 —— 证明例外**只在战斗机身上生效**，
+            //   而不是把"轰炸机当攻击者就一律挨反击"写成了通用规则。
             string[] labels = {
                 "步兵 2/3 → 步兵 3/4（基准双向结算）",
                 "坦克 4/5 → 步兵 3/4（坦克不吃例外）",
@@ -941,12 +949,15 @@ namespace KardsLike.EditorTools
                 "火炮 6/5 → 坦克 4/5（火炮**不受**反击）",
                 "轰炸机 4/5 → 坦克 4/5（轰炸机**不承受**反击）",
                 "步兵 2/3 → 火炮 6/5（火炮当防守方**照常还手**）",
-                "步兵 2/3 → 轰炸机 4/5（轰炸机**不造成**反击）"
+                "步兵 2/3 → 轰炸机 4/5（轰炸机**不造成**反击）",
+                "战斗机 4/3 → 轰炸机 4/5（轰炸机当防守方**一律不还手**）",
+                "轰炸机 4/5 → 战斗机 4/3（**例外：打战斗机要挨反击**）",
+                "轰炸机 4/5 → 步兵 3/4（对照：打非战斗机仍**不承受**）"
             };
-            CardDef[] atkDefs = { mg, armored, fighter, howitzer, bomber, mg, mg };
-            CardDef[] tgtDefs = { para, para, para, armored, armored, howitzer, bomber };
-            int[] expAtkLoss = { 3, 3, 3, 0, 0, 6, 0 };
-            int[] expTgtLoss = { 2, 4, 4, 6, 4, 2, 2 };
+            CardDef[] atkDefs = { mg, armored, fighter, howitzer, bomber, mg, mg, fighter, bomber, bomber };
+            CardDef[] tgtDefs = { para, para, para, armored, armored, howitzer, bomber, bomber, fighter, para };
+            int[] expAtkLoss = { 3, 3, 3, 0, 0, 6, 0, 0, 4, 0 };
+            int[] expTgtLoss = { 2, 4, 4, 6, 4, 2, 2, 4, 4, 4 };
 
             sb.AppendLine("### 9.1 单位互攻的反击矩阵");
             sb.AppendLine();
@@ -1023,16 +1034,30 @@ namespace KardsLike.EditorTools
                 sb.AppendLine("| " + kindNames[i] + " | " + CardDb.CountUnitsOfKind(kinds[i]) + " |");
             }
             sb.AppendLine();
-            sb.AppendLine("⇒ 本轮**真正改变对局行为的只有榴弹炮一张**（它从「一换一」变成「白吃」）。");
-            sb.AppendLine("所以 200 局里应当只有少数几局发生变化 —— 这是一条可证伪的预测：");
-            sb.AppendLine("**若 200 局大面积改变，说明规则写错了地方（例如把坦克也写成了免反击），必须回头查。**");
+            sb.AppendLine("⇒ [阶段2.5 · 提交 C] 本轮**同时改了三件事**：两只空军进池（+2 张卡 ⇒ 牌库 36 → 42）、");
+            sb.AppendLine("`MaxTurns` 72 → 88、以及「轰炸机打战斗机要挨反击」这条例外。");
+            sb.AppendLine("⇒ **200 局与提交 B 的逐位可比性不再成立**（卡池顺序变了，牌库构造顺序随之全变），");
+            sb.AppendLine("本轮 200 局只能验证三条硬性质：**全部在回合上限内终止 / L3 仍为 0 / 先手偏差仍在可用区间**；");
+            sb.AppendLine("「规则矩阵正确」由上面的手工摆盘负责，「牌库真的变成 42 张」由本节的池内分布与 §9.4 负责。");
+            sb.AppendLine("**不要再拿本轮数字去和提交 B 做逐位对比 —— 那不是归因，那是刻舟求剑。**");
             sb.AppendLine();
 
             // ---- 9.4 数据层断言 ----
             bool howitzerOnlyArtillery = CardDb.CountUnitsOfKind(UnitType.Artillery) == 1
                                          && howitzer.UnitKind == UnitType.Artillery;
-            bool airNotInPoolYet = CardDb.CountUnitsOfKind(UnitType.Fighter) == 0
-                                   && CardDb.CountUnitsOfKind(UnitType.Bomber) == 0;
+            bool airInPoolExactlyOne = CardDb.CountUnitsOfKind(UnitType.Fighter) == 1
+                                       && CardDb.CountUnitsOfKind(UnitType.Bomber) == 1
+                                       && CardDb.Cards.Length == 14
+                                       && CardDb.Units.Length == 10
+                                       && CardDb.BuildDeck(GameEngine.DeckCopiesPerCard).Count == 42;
+
+            // [阶段2.5 · 提交 C] 把设计文档 §10.6 的推导**落成断言**，而不是只写在文档里：
+            //   自然终止点上界 = 2D − 1（D = 牌库张数）。MaxTurns 必须盖住它，
+            //   否则 L3 会抢在疲劳结算完之前触发，"L3 触发 0 局"这条性质会被打破。
+            //   这条断言会在「改牌库张数」或「改 DeckCopiesPerCard」时立刻报警 ——
+            //   它拦的正是历史上连续坑过三轮的那类改动。
+            int deckCount = CardDb.BuildDeck(GameEngine.DeckCopiesPerCard).Count;
+            bool maxTurnsCoversDeck = GameEngine.MaxTurns >= 2 * deckCount - 1;
             bool hqAttackZero = CardDb.Hq.Attack == 0 && CardDb.Hq.UnitKind == UnitType.None;
             bool actionCostIsPureField = true;
             for (int i = 0; i < CardDb.Cards.Length; i++)
@@ -1046,18 +1071,21 @@ namespace KardsLike.EditorTools
             sb.AppendLine();
             sb.AppendLine("| 检查 | 结果 |");
             sb.AppendLine("|---|---|");
-            sb.AppendLine("| 池内火炮只有榴弹炮一张（⇒ 200 局的变化可全部归因到它） | " + Mark(howitzerOnlyArtillery) + " |");
-            sb.AppendLine("| 战斗机 / 轰炸机尚未进池（拍板项 ③ 排在下一轮） | " + Mark(airNotInPoolYet) + " |");
+            sb.AppendLine("| 池内火炮只有榴弹炮一张（⇒ 火炮类规则只影响它一张卡） | " + Mark(howitzerOnlyArtillery) + " |");
+            sb.AppendLine("| 战斗机 / 轰炸机各恰好 1 张已在池内；卡池 14 张 / 单位 10 张 / 牌库 42 张 | " + Mark(airInPoolExactlyOne) + " |");
+            sb.AppendLine("| **`MaxTurns` 盖得住自然终止点上界**（`" + GameEngine.MaxTurns + " >= 2 × " + deckCount +
+                          " − 1 = " + (2 * deckCount - 1) + "`） | " + Mark(maxTurnsCoversDeck) + " |");
             sb.AppendLine("| HQ 攻击力为 0 且不是兵种 | " + Mark(hqAttackZero) + " |");
             sb.AppendLine("| `ActionCostOf` 已退化为一行取值（与 `CardDef.ActionCost` 逐卡一致） | " + Mark(actionCostIsPureField) + " |");
             sb.AppendLine();
 
-            ok = allExchange && allHq && howitzerOnlyArtillery && airNotInPoolYet
+            ok = allExchange && allHq && howitzerOnlyArtillery && airInPoolExactlyOne && maxTurnsCoversDeck
                  && hqAttackZero && actionCostIsPureField;
 
             sb.AppendLine("**结论：" + (ok
-                ? "兵种反击例外全部符合设计文档 §10.2 —— 火炮只免「承受」不免「造成」，"
-                  + "轰炸机双向都不参与反击，战斗机与步兵 / 坦克正常双向结算，打 HQ 仍由「HQ 攻 0」保证。"
+                ? "兵种反击例外全部符合设计文档 §10.2 / §12.2 —— 火炮只免「承受」不免「造成」；"
+                  + "轰炸机不造成反击（当防守方不还手），当攻击者时也不受反击**但打战斗机例外**；"
+                  + "战斗机与步兵 / 坦克正常双向结算；打 HQ 仍由「HQ 攻 0」保证。"
                 : "兵种反击例外行为不符预期，详见上表。") + "**");
             sb.AppendLine();
             return sb.ToString();
