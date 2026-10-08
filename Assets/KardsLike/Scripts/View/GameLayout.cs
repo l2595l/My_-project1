@@ -223,20 +223,23 @@ namespace KardsLike.View
                                                  new Vector2(24f, 148f), new Vector2(320f, 108f),
                                                  UiKit.PanelFill, UiKit.PanelBorder, 10);
             RectTransform resValueRt = UiKit.Anchored("Value", resPanel, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                                                      new Vector2(0f, -12f), new Vector2(300f, 42f));
-            ResourceText = UiKit.AddLabel(resValueRt, "", 27f, UiKit.Accent, TextAlignmentOptions.Center, FontStyles.Bold);
+                                                      new Vector2(0f, -10f), new Vector2(300f, 38f));
+            ResourceText = UiKit.AddLabel(resValueRt, "", 26f, UiKit.Accent, TextAlignmentOptions.Center, FontStyles.Bold);
 
             // [STAGE2C] 独立的"行动点"已删除 —— 移动与攻击的花费改成从**资源**里扣。
             // 腾出来的这一行改成常驻说明：不写清楚的话，玩家会以为移动是免费的，
             // 然后对着"资源莫名少了一截"困惑。
+            // [阶段2.5-TASK-B] 措辞改为指向卡面：现在每张单位卡的左上角都印着行动花费
+            //   （手牌上是"部署费 + 小号行动费"，上场后只剩小号行动费），
+            //   所以这行说明的作用变成了"把玩家引导到那个数字上"，而不是干讲规则。
             RectTransform actionCostRt = UiKit.Anchored("ActionCost", resPanel, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                                                        new Vector2(0f, -58f), new Vector2(300f, 24f));
-            UiKit.AddLabel(actionCostRt, "移动 / 攻击消耗资源（按费用 1~3）", 14f, UiKit.TextDim,
-                           TextAlignmentOptions.Center);
+                                                        new Vector2(0f, -50f), new Vector2(300f, 34f));
+            UiKit.AddLabel(actionCostRt, "移动 / 攻击消耗的是资源\n（按卡面左上角小数字扣）", 12.5f, UiKit.TextDim,
+                           TextAlignmentOptions.Center, FontStyles.Normal, true);
 
             RectTransform resSubRt = UiKit.Anchored("Sub", resPanel, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                                                    new Vector2(0f, 8f), new Vector2(300f, 22f));
-            ResourceSubText = UiKit.AddLabel(resSubRt, "", 14f, UiKit.TextDim, TextAlignmentOptions.Center);
+                                                    new Vector2(0f, 6f), new Vector2(300f, 20f));
+            ResourceSubText = UiKit.AddLabel(resSubRt, "", 13f, UiKit.TextDim, TextAlignmentOptions.Center);
 
             RectTransform endTurnRt = UiKit.Anchored("EndTurnButton", root, new Vector2(1f, 0f), new Vector2(1f, 0f),
                                                      new Vector2(-24f, 24f), new Vector2(320f, 112f));

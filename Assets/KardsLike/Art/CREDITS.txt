@@ -65,3 +65,37 @@ KardsLike 美术资源来源登记
   Docs/美术资源-卡面重构预览.png    卡框 + 图标合成后的效果（手牌/战场/指令卡/32% 缩放）
   Docs/美术资源-兵种图标.png        5 个定稿图标 + 三档徽章尺寸实拍
   Docs/美术资源-图标候选对照.png    选型过程留下的候选对照图（含被否决的项）
+
+
+四、代码如何引用上面这些图（2026-10-08 任务 B 新增）
+----------------------------------------
+  ★ 本目录（Art/）**刻意不叫 Resources** —— 那是 Unity 的保留目录名，会让整目录
+    无条件打进包体；而且一旦为了加载而改目录名，本文件与文档里的路径登记全部失效。
+    所以：**图片留在 Art/ 原样不动，运行期引用走一份 ScriptableObject。**
+
+  引用载体   Assets/KardsLike/Resources/CardArt.asset
+  脚本       Assets/KardsLike/Scripts/View/CardArt.cs
+  加载方式   Resources.Load<CardArt>("CardArt")  —— 静态入口 CardArt.Instance
+
+  该 .asset 持有下面 7 个引用（全部指向 Art/ 下的原图，**没有复制第二份**）：
+      Frame        -> Art/CardFrame.png
+      IconInfantry -> Art/UnitIcons/infantry.png
+      IconTank     -> Art/UnitIcons/tank.png
+      IconArtillery-> Art/UnitIcons/artillery.png
+      IconFighter  -> Art/UnitIcons/fighter.png
+      IconBomber   -> Art/UnitIcons/bomber.png
+
+  ⚠️ 换图时要做的事：**只替换 Art/ 下的同名文件即可**（规格保持一致），
+     CardArt.asset 里的引用靠 GUID 自动跟随；本文件与文档都不需要改
+     —— 除非**改了文件名或像素尺寸**，那就要回来同步这里与
+     阶段 2.5 文档 §8、PROJECT_STATE §4。
+
+  ⚠️ 空安全：取不到资源时 `CardArt` 只 LogWarning 一次并退回程序化绘制，
+     所以「Art/ 整个删掉工程仍能编译、仍能玩」（只是卡面退回纯色圆角块）。
+     这条是刻意保留的底线，改 CardArt.cs 时不要破坏它。
+
+  开窗几何（代码里的常量，逐像素量出来的，换卡框必须重新量）：
+      WindowLeft 5.82% / WindowTop 7.96% / WindowWidth 88.55% / WindowHeight 53.66%
+      CornerRadius 4.36%（= 24 / 550）
+      见 Assets/KardsLike/Scripts/View/CardArt.cs 顶部的常量区。
+

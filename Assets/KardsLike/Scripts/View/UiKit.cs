@@ -174,6 +174,39 @@ namespace KardsLike.View
         }
 
         /// <summary>
+        /// 生成（并缓存）一张**纵向 alpha 渐变**的白色贴图：顶部全透明 → 底部不透明。
+        ///
+        /// [阶段2.5-TASK-B] 用途：压在卡面开窗的底部当阴影（配 `Image.color = (0,0,0,a)`）。
+        /// 一张 1×N 的贴图同时充当"调色板 + 遮罩"，不用引入任何美术资源。
+        /// </summary>
+        public static Sprite VerticalFade(int height)
+        {
+            if (height < 2) height = 2;
+
+            string key = "vfade" + height;
+            Sprite cached;
+            if (_spriteCache.TryGetValue(key, out cached) && cached != null) return cached;
+
+            Color32[] px = new Color32[height];
+            for (int y = 0; y < height; y++)
+            {
+                // Texture2D 的 y=0 是**底部**；让底部最不透明
+                float t = 1f - (float)y / (height - 1);
+                px[y] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(t * 255f));
+            }
+
+            Texture2D tex = new Texture2D(1, height, TextureFormat.RGBA32, false);
+            tex.wrapMode = TextureWrapMode.Clamp;
+            tex.filterMode = FilterMode.Bilinear;
+            tex.SetPixels32(px);
+            tex.Apply();
+
+            Sprite s = Sprite.Create(tex, new Rect(0, 0, 1, height), new Vector2(0.5f, 0.5f), 100f);
+            _spriteCache[key] = s;
+            return s;
+        }
+
+        /// <summary>
         /// 圆角矩形的有符号距离场覆盖率（0 = 完全在外，1 = 完全在内）。
         /// 用距离场而不是"逐像素判断在不在圆内"，是为了拿到 1 像素的抗锯齿边缘 ——
         /// 直接二值化会让圆角看起来全是锯齿。
@@ -299,6 +332,25 @@ namespace KardsLike.View
             t.enableWordWrapping = wrap;
             t.overflowMode = TextOverflowModes.Overflow;
             t.raycastTarget = false;
+            return t;
+        }
+
+        /// <summary>
+        /// 挂一段**字号自适应**的文字：给定上下限，TMP 自己缩到刚好放得下。
+        ///
+        /// [阶段2.5-TASK-B] 为什么需要它：卡面下部的效果文字长度差异极大 ——
+        /// 「精准打击」4 个字，而轰炸机是「重型轰炸：开火时不受反击（战斗机除外），但被攻击时还毫无还手之力。」
+        /// 这种 30+ 字的句子。固定字号不是溢出卡面，就是小到看不清。
+        /// 交给自动缩放比自己按字数估算行高稳得多（也避免了中文断行的各种意外）。
+        /// </summary>
+        public static TextMeshProUGUI AddLabelAuto(RectTransform rt, string text, float maxSize, float minSize,
+                                                   Color color, TextAlignmentOptions align,
+                                                   FontStyles style = FontStyles.Normal, bool wrap = true)
+        {
+            TextMeshProUGUI t = AddLabel(rt, text, maxSize, color, align, style, wrap);
+            t.enableAutoSizing = true;
+            t.fontSizeMax = maxSize;
+            t.fontSizeMin = minSize;
             return t;
         }
 

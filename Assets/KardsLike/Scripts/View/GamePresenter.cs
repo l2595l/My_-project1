@@ -412,7 +412,11 @@ namespace KardsLike.View
                 }
                 else if (card.IsUnit)
                 {
-                    _layout.HintText.text = "【" + card.Name + "】：点击下方「你 · 支援阵线」把它部署上去";
+                    // [阶段2.5-TASK-B] 顺带交代它的兵种与"上场后动一次要花几点" ——
+                    // 卡面左上角那枚小数字就是它，这里用文字再说一遍，省得玩家自己去找。
+                    _layout.HintText.text = "【" + card.Name + " · " + CardArt.FullName(card.UnitKind) +
+                                            "】：点击下方「你 · 支援阵线」部署（上场后每次行动花 " +
+                                            GameEngine.ActionCostOf(card) + " 点资源）";
                 }
                 else
                 {
@@ -437,15 +441,20 @@ namespace KardsLike.View
                 string reason;
                 bool canMove = _engine.CanUnitMove(u, out reason);
                 bool canAttack = _engine.HasAttackTarget(u);
-                string head = "【" + u.Def.Name + "】（" +
+
+                // [阶段2.5-TASK-B] 选中的单位要能一眼看到"它属于哪个兵种"与"这次动它要花几点资源"
+                //   —— 前者对应卡面开窗的插画与底部徽章，后者对应左上角那枚小数字。
+                string kindText = u.Def.UnitKind == UnitType.None ? "" : " · " + CardArt.FullName(u.Def.UnitKind);
+                string head = "【" + u.Def.Name + kindText + "】（" +
                               (u.Line == Line.Front ? "前线" : "支援阵线") + "）";
+                string costText = "，本次行动需要 " + GameEngine.ActionCostOf(u.Def) + " 点资源";
 
                 if (canMove && canAttack)
-                    _layout.HintText.text = head + "：点「前线」移入，或点击敌方目标 / 敌方 HQ";
+                    _layout.HintText.text = head + "：点「前线」移入，或点击敌方目标 / 敌方 HQ" + costText;
                 else if (canMove)
-                    _layout.HintText.text = head + "：点击中央的「前线」把它移上去";
+                    _layout.HintText.text = head + "：点击中央的「前线」把它移上去" + costText;
                 else if (canAttack)
-                    _layout.HintText.text = head + "：点击敌方单位交换，或点击敌方 HQ 打脸";
+                    _layout.HintText.text = head + "：点击敌方单位交换，或点击敌方 HQ 打脸" + costText;
                 else
                     _layout.HintText.text = head + "：" + reason;
                 return;
