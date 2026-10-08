@@ -22,8 +22,20 @@
 | UI 方案 | uGUI + TextMeshPro 3.0.7 |
 | 场景 | `Assets/Scenes/SampleScene.unity` |
 | 切入点 | 场景里的 `KardsLikeGame` 对象，挂着 `KardsLike.View.GamePresenter` |
+| 版本控制 | **git**，2026-10-08 建立基线快照（分支 `main`，仅本地、无远程） |
 
 **运行方式**：打开工程 → 打开 SampleScene → 直接点 Play。不需要任何额外操作。
+
+**版本控制（2026-10-08 起）**：工程根目录已是 git 仓库 —— 此前 `git rev-parse` 报 `not a repository`，任何重构都只能用**手工指纹**（数成员定义数、数 `AddLog` 调用点……）自证"没丢东西"，成本高、不可复用，且旧基线一旦被覆盖就永久消失。
+
+- `.gitignore` 只忽略 Unity / IDE **能自动重建**的生成物：`Library/`（2.3 GB）、`.vs/`（198 MB）、`Temp/`、`Logs/`、`obj/`、`*.csproj`、`*.sln`
+- 入库 **214 个文件、约 25 MB**，四处真身全在：`Assets/` / `Docs/` / `ProjectSettings/` / `Packages/`
+- ⚠️ **`.gitignore` 不支持行尾注释** —— `#` 只在行首才是注释，模式后面跟 `#` 会让整行变成字面量而**静默失效**（已在建立时踩过一次）
+- 仓库刻意设 `core.autocrlf=false`，并在 `.gitattributes` 标记二进制不转换 —— 保护 `.cs` 的 **UTF-8 with BOM + CRLF** 原样，避免行尾自动转换破坏 BOM 或制造全文件级 diff 噪音
+- 目录专用模式（`[Bb]uild/` 这类带尾斜杠的）**只对确实存在的目录生效**；目录不存在时 `git check-ignore` 报"未忽略"属正常现象
+
+> ⚠️ **`Assets/UOSLauncherEncrypt/EncryptKey.cs` 内含一个硬编码的 64 位密钥**（Unity 中国版模板遗留，游戏代码**零引用**；同目录 `EncryptManager.cs` / `DebugProbe.cs` 亦无人调用）。
+> 仅本地提交无风险；**若将来要推送到远程仓库，必须先轮换该 key，或先从 git 历史中清除** —— 历史里的东西删不干净（需 `git filter-repo` 重写历史）。
 
 **自检方式**：菜单 **`KardsLike/自检`**（实现于 `Assets/KardsLike/Editor/KardsLikeSelfCheck.cs`）。一次跑完 **8 项**核心契约并输出报告，报告同时打到 Console 与 `Docs/自检报告-阶段1收口.md`。**改动 Core 之后必须先跑它，再谈别的。**
 
@@ -571,6 +583,31 @@ HQ 单位化 + 疲劳原在此列，已于**阶段 2 任务 C** 完成 —— �
 [ ] 按 T → 倒计时关闭；再按 T → 重新出现且读数为 60
 ```
 
+### 改动前必做：git 基线提交（2026-10-08 起）
+
+重构或大改之前先存一个快照，改完用 `git diff` 直接证明"到底改了哪些文件、多了少了几行"。
+这样就不再需要每次现编一套手工指纹（数成员定义、数 `AddLog` 调用点、比常量字面量……）。
+
+```bash
+# 1. 动手前 —— 存快照
+git add -A && git commit -m "重构前快照"
+
+# 2. 改代码 …
+
+# 3. 看改了哪些文件、多了少了几行（摘要）
+git diff --stat
+
+# 4. 逐行看（-M 识别"整段搬家"，-w 忽略纯空白变动）
+git diff -M -w
+
+# 5. 改坏了立刻整体回退（也可只退单个文件）
+git checkout -- Assets/KardsLike/Scripts/Core/GameEngine.Combat.cs
+```
+
+**边界必须清楚：git 只证明"文本层改了什么"，证明不了"行为没变"。**
+行为层仍必须靠 **自检 8/8 + 200 局逐位一致（同种子、同统计、日志条数 200）**。
+两者互补 —— git 负责"改动范围可证"，模拟与自检负责"规则行为未变"，不能互相替代。
+
 ### 批量转 UTF-8 BOM（PowerShell）
 
 ```powershell
@@ -597,4 +634,5 @@ Get-ChildItem -Path $root -Recurse -Filter *.cs | ForEach-Object {
 | 2026-10-08 | 阶段 2.5（**美术资源落位**） | 用户拍板**解除「零美术资源、全部程序化生成」约束**（口径："个人练习用，来源不限"），本轮把**兵种图标 + 卡面框架**下载进工程（**未改任何 .cs**）：<br>· 新增 `Assets/KardsLike/Art/` 目录 —— 这是工程**第一个、也是唯一一个**外部美术资源目录<br>· **卡面框架** `CardFrame.png` 550×766 RGBA：来源 OpenGameArt「Card Template」/ Cethiel，**CC0**。原图 626×830 四周有 27~43px 透明留白，裁到不透明外接框 `(43,27)-(593,793)`；原图另存 `CardFrame_Source626x830.png` 备查<br>· **兵种图标 ×5** `UnitIcons/{infantry,tank,artillery,fighter,bomber}.png` 256×256 RGBA：来源 game-icons.net（`skoll/stahlhelm`、`lorc/battle-tank`、`lorc/cannon`、`skoll/airplane`、`skoll/carpet-bombing`），**CC BY 3.0**。原图是"黑底方形 + 白图"，处理方式 = 剥掉黑底路径 + 填充统一改白（保留可着色性）+ 按 alpha 外接框居中并统一到画布 88% 宽度（保证五个图标视觉重量一致）<br>· **来源/许可/处理方式登记**：`Assets/KardsLike/Art/CREDITS.txt`（含"要商业化时的洗白路径"：整批换 CC0 图标即可，卡框不用换）<br>· **Unity 导入设置**：7 个 PNG 全部经 MCP 配为 `Sprite`/`Single` + `alphaIsTransparency` + **mipmap 开**（550px→112px 必须靠 mipmap 抗锯齿）+ `Bilinear` + `Clamp` + **Uncompressed**（硬边剪影不宜 DXT）。实测 `CardFrame.png` → sprite 550×766/RGBA32/10 级 mip，5 个图标 → 256×256/RGBA32/9 级 mip，**Console 零报错，自检 8/8 仍通过**<br>· ✅ **两条关键实测结论**：① **卡牌尺寸一个都不用改** —— 卡框比例 0.7180 vs 手牌 148×208 = 0.7115（误差 0.9%）、战场 112×150 = 0.7467（误差 4%）；反过来把手牌加宽到 157 会让 `HandRow`（1200×208）溢出，**要拉的是卡框不是卡牌**。② **不需要九宫格** —— 卡框是"整张开窗"设计，四角金饰必须按整卡缩放才不错位。③ 实测开窗几何 `left 5.8% / top 8.0% / width 88.5% / height 53.7%`，开窗下方 38.4% 为文字区<br>· **选型经验**：小尺寸可辨性必须实测 —— `great-war-tank` / `flamethrower-soldier` / `helmet-head-shot` 大图好看但缩到 22px 全糊；`delapouite/tank-top` 名字像"坦克俯视图"实际是**一件背心**。最终 5 个在 **18px** 下仍可辨<br>· **产出物**：`Docs/美术资源-卡面重构预览.png`（卡框+图标合成效果：手牌/战场/指令卡/32% 缩放）、`Docs/美术资源-兵种图标.png`、`Docs/美术资源-图标候选对照.png`<br>· 文档同步：`阶段2.5-...md` 新增 **§8 美术资源**、改写 §2.4 与提示词 3（原"不许引入任何美术资源"改为"必须用 `Art/` 下资源、但不许再新增外部资源"）、§5 加"任务 B 前置条件已满足"；本文档 §3.4 / §4 文件树 / §7 新增"阶段 2.5"节<br>· ⚠️ **尚未接入代码**：素材目前**没有被任何一行 View 代码用到**，接入属于**阶段 2.5 的任务 B**（提示词 3） |
 | 2026-10-08 | 阶段 2.5 · **提示词 0（文档登记）** | 按《阶段2.5-...》**提示词 0** 把四组事实登记进规则文档（**只改 Docs/ 下的 .md，`Assets/` 一字未动，可用文件修改时间自证**）：<br>· 设计文档升至 **v1.7**，新增 **§9「阶段 2.5 前瞻登记：单位兵种与 Kards 差异（仅登记，尚未实现）」**，含 4 个子节：**§9.1 单位兵种**（5 种兵种的官方定义表 + 来源 + **事实标注**：官方原文只明确"火炮/轰炸机不受反击"与"轰炸机防御时不造成伤害"，其余细节属推断；含实现边界"必须拆两轮"、建议兵种分配表、以及"面板预算公式定价不了能力"的警告）／**§9.2 行动花费的卡面口径**（官方原文「单位的指挥点字段中字体较小的数字为单位的行动花费。单位在部署后将仅会显示此数字。」+ 手牌/战场两种状态的现状差距表 + **架构待办**：行动费须从 `ActionCostOf` 推导值改为 `CardDef` 显式数据字段，否则卡面与引擎会出现两个真相来源）／**§9.3 与 Kards 的 7 处差异 D1~D7**（每处写清 Kards / 我们 / 建议改不改 / 为什么；**D4 疲劳 `2^k` 明确规定不改** —— `MaxTurns = 72` 的安全余量依赖它）／**§9.4 三个待拍板项**<br>· 交叉引用：§2.8 末尾 → §9.2（行动费卡面）；§4.5 末尾 → §9.4（卡池 12→14、牌库 36→42）；§7 的"不包含内容"表新增**兵种**行、并给"美术资源"行补上口径变更注<br>· 本文档同步：阶段 2.5 节新增**进度澄清**（6 段提示词里只有提示词 0 完成，**真实进度 0/5**）、执行顺序表状态归正、新增 **3 个待拍板项**表<br>· ⚠️ **本次为纯登记**：没有改任何规则、常量、代码；`UnitType` 在 Core 里仍是零匹配、`GameEngine.cs` 仍是单文件 1063 行、`View/` 仍未引用 `Art/` |
 | 2026-10-08 | 阶段 2.5 · **提示词 1（拆 `GameEngine.cs`）** | 把 1063 行的 `Core/GameEngine.cs`（1100 行阈值的 96%，**已挂三轮的 P0**）按职责拆成 **4 个 partial 文件**。**纯结构重构 —— 一行规则都没有改**：<br>· `GameEngine.cs` **223 行** —— 常量 / 字段 / 构造函数 / 回合归属守卫 / `StartMatch` / `Restart`<br>· `GameEngine.Turn.cs` **222 行** —— 回合流程（`BeginTurn`/`EndTurn`）/ 疲劳（`ResolveFatigue`/`FatigueDamage`）/ 抽牌与爆牌 / 终局（`EndMatch`/`EndByTurnLimit`）<br>· `GameEngine.Play.cs` **246 行** —— 出牌（`CanPlayCard`/`PlayCard`）/ 目标校验 / 指令卡结算（`ResolveOrder`）/ `SpendAction` / `GetPlayableHandIndices`<br>· `GameEngine.Combat.cs` **422 行** —— 战斗与线位（`CanUnitAct`/`CanAttackTarget`/`CanUnitMove`/`MoveUnit`/`AttackWithUnit`）/ 伤害与死亡清理（`DamageUnit`/`ResolveDeaths`/`CheckHqDefeat`）/ 单位查询辅助（`FindUnit`/`CollectUnitsOf`/`CountUnitsOf`/`GetAttackableUnits`/`GetMovableUnits`）<br>· **最大文件 422 行 ≤ 450** ✅（提示词 1 的第 4 条验收标准）。四项合计 1113 行 = 原 1063 + 50 行「3 个新文件的 using/namespace/类声明/类文档外壳 + 主文件补的拆分说明」，**零逻辑新增**<br>· **两个提示词未指定归属的区段**：终局 → `Turn.cs`（回合流程的终点与兜底）；查询辅助 → `Combat.cs`（同为"战场上单位"的只读查询，与线位同域），其中只依赖 `CanPlayCard` 的 `GetPlayableHandIndices` 移到 `Play.cs`<br>· **静态核对（工程不在 git 下，无法 `git diff`，改用指纹核对）**：39 个成员各恰好 1 次定义、`State.AddLog(` 调用点 **26**（原 26）、`const` 声明 **11**（原 11）、11 个关键常量字面量逐字相同、`using UnityEngine` **0**<br>· **验收**：① Console 零报错零警告；② 自检 **8 / 8**；③ 200 局统计与拆分前**逐位一致** —— 先手 **107（53.5%）** / 后手 93 / 打脸 **174** / 疲劳 **26** / L3 **0** / 平均 HalfTurn **40.28** / 最大 **59** / 先手偏差 **7.0 个百分点**；④ `seed=12345` 两局逐字段逐条日志一致（`Player0Win` / `HalfTurn 58` / HQ `9 : −15` / **200 条日志**）<br>· **日志条数 200 是"日志文字未被改坏"的硬指标** —— 统计数字对日志文案不敏感，但日志行数对"多写/少写一条 `AddLog`"极其敏感；配合 `AddLog(` = 26 处，两侧夹住<br>· 其余 5 个 Core 文件（`Rng`/`Cards`/`CardDb`/`GameState`/`GreedyAI`）与全部 View 文件**一字未动**；`Core/` 零 Unity 依赖保持（asmdef 锁死）；4 个新文件均为 **UTF-8 with BOM**<br>· 文档同步：阶段 2.5 文档新增 **§9 提示词 1 落地记录**（行数表 / 静态核对 / 自检摘录 / 声明）、§5 执行顺序表加"状态"列；本文档 §4 文件树与行数表、§7 阶段 2.5 进度（0/5 → **1/5**）与执行顺序表、P0 行 |
+| 2026-10-08 | 阶段 2.5 · **版本控制基线（工程基础设施）** | 解决"**怎么证明重构没丢东西**"这个一直绕不过去的坑 —— 根因是工程**根本没有版本控制**（`git rev-parse` 报 `not a repository`），导致每次重构只能现编一套手工指纹自证，且**旧基线一旦被覆盖就永久消失**（提示词 1 那次拆分即已无法再用工具证明）：<br>· `git init -b main` + 写入 Unity 专用 `.gitignore`（含"`#` 不支持行尾注释"的踩坑注释）与 `.gitattributes`（只标二进制、不设 `text=auto`）<br>· 仓库级配置 `core.autocrlf=false`（保护 `.cs` 的 **UTF-8 with BOM + CRLF** 原样）、`core.quotepath=false`（中文路径可读）、本仓库专属占位身份<br>· **忽略** `Library/`（2.3 GB）/ `.vs/`（198 MB）/ `Temp/` / `Logs/` / `obj/` / `*.csproj` / `*.sln`；**入库 214 个文件、约 25 MB**，四处真身全在（`Assets/` 170 + `ProjectSettings/` 25 + `Docs/` 10 + `Screenshots/` 4 + `Packages/` 2 + 3 个根配置）<br>· **基线提交 `7ba68dba`**，提交说明里固化了成分指纹（Core 成员 39 / `State.AddLog(` 26 / `const` 11 / `using UnityEngine` 0 / 200 局日志 200 / 先手 107:93），作为日后交叉验证的依据<br>· **端到端实测**：故意给 `GameEngine.cs` 追加一个空行 → `git status` 报 ` M`、`git diff --stat` 报 `1 insertion(+)`；`git checkout --` 还原后 **blob 哈希 `3d57c6f1…` 前后完全一致、BOM `ef bb bf` 保留、工作区干净** —— 证明"改动可证 + 可回退"两条链路都通<br>· ⚠️ **提交前安全排查**：发现 `Assets/UOSLauncherEncrypt/EncryptKey.cs` 含硬编码 64 位密钥（Unity 中国版模板遗留，**游戏代码零引用**，同目录另 2 个文件亦无人调用）。鉴于口径是"个人练习、仅本地"，**本次仍纳入基线**，但已在 §2 明确标注：**若将来要推远程，必须先轮换该 key 或重写历史清除**<br>· 文档同步：本文档 §2 新增"版本控制"行与整段说明、§8 新增「改动前必做：git 基线提交」（含 5 步命令与"git 证明文本、模拟证明行为"的边界声明）；阶段 2.5 文档 §9.2 的"工程不在 git 下"改写为"当时不在 git 下"，并注明指纹核对**已降级为备用手段**<br>· ✅ **副产品**：手工指纹法没有被废弃，而是从"每次都要现编"降级为两种场合的**定点工具** —— ① 证明结构性不变量；② 行为层验收。git 与它互补，不能互相替代 |
 
