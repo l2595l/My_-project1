@@ -1,0 +1,67 @@
+KardsLike 美术资源来源登记
+========================================
+最后更新：2026-10-08
+
+★ 重要说明
+----------
+本工程最初的设计约束是「零美术资源、全部程序化生成」。
+该约束已于 2026-10-08 解除：允许引入外部美术资源（当前仅限「兵种图标」与「卡面框架」两类）。
+本项目当前定位为个人学习/练习用途，资源来源未做商用合规筛选。
+
+⚠️ 若将来要对外发布或商业化，必须先处理下面两类问题：
+  1) UnitIcons/ 下的图标是 CC BY 3.0，商用必须署名（本文件即是署名载体，
+     但发布时还需在游戏内「关于」页或说明文档里体现）。
+  2) CardFrame.png 是 CC0，可商用、免署名，风险最低。
+  最省事的替代方案：把 UnitIcons/ 整批换成 CC0 图标（如 ClipSafari / Iconduck
+  上的航空剪影），即可彻底去掉署名义务。
+
+
+一、兵种图标（5 个）
+----------------------------------------
+位置    Assets/KardsLike/Art/UnitIcons/*.png
+规格    256x256 RGBA，白色剪影 + 透明背景（Unity 里靠 Image.color 按兵种着色）
+文件    infantry.png / tank.png / artillery.png / fighter.png / bomber.png
+来源    game-icons.net
+作者    见下表「原图路径」的第一段目录名
+许可    CC BY 3.0 —— https://github.com/game-icons/icons/blob/master/license.txt
+
+  兵种       文件            原图路径（github.com/game-icons/icons）
+  ---------  --------------  ----------------------------------------
+  步兵       infantry.png    skoll/stahlhelm.svg
+  坦克       tank.png        lorc/battle-tank.svg
+  火炮       artillery.png   lorc/cannon.svg
+  战斗机     fighter.png     skoll/airplane.svg
+  轰炸机     bomber.png      skoll/carpet-bombing.svg
+
+  处理方式：剥掉原图「黑底方形」路径，把填充统一改成 #FFFFFF，
+            用无头 Chrome 栅格化为 256x256，再按 alpha 外接框居中、
+            统一缩放到画布 88% 宽度，保证五个图标视觉重量一致。
+
+
+二、卡面框架（1 张）
+----------------------------------------
+位置    Assets/KardsLike/Art/CardFrame.png
+规格    550x766 RGBA，四周圆角外与上部插画开窗均为透明
+来源    OpenGameArt — "Card Template"
+        https://opengameart.org/content/card-template-1
+作者    Cethiel (https://opengameart.org/users/cethiel)
+许可    CC0 —— 可商用、免署名
+
+  处理方式：原图 626x830 四周各有 27~43px 透明留白，
+            裁到不透明外接框 (43,27)-(593,793) 得到 550x766。
+            裁剪后比例 0.7180，与工程现有卡牌尺寸（手牌 148x208 = 0.7115、
+            战场 112x150 = 0.7467）误差在 1%~4% 以内，
+            因此卡牌尺寸一个都不用改。
+
+  备用    CardFrame_Source626x830.png —— 未裁剪的原图，留作重新裁剪的底稿。
+
+  实测的开窗几何（占 550x766 的百分比，任务 B 直接用这几个数）：
+      left 5.8%  /  top 8.0%  /  width 88.5%  /  height 53.7%
+      开窗下方的空白区占整卡高度的 38.4%（放效果文字 + 底部徽章行）
+
+
+三、预览图（在 Docs/ 下，不是运行期资源）
+----------------------------------------
+  Docs/美术资源-卡面重构预览.png    卡框 + 图标合成后的效果（手牌/战场/指令卡/32% 缩放）
+  Docs/美术资源-兵种图标.png        5 个定稿图标 + 三档徽章尺寸实拍
+  Docs/美术资源-图标候选对照.png    选型过程留下的候选对照图（含被否决的项）

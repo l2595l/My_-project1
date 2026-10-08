@@ -1,0 +1,38 @@
+# ============================================================
+#  KardsLike · 行尾与二进制标记
+#  建立时间：2026-10-08
+#
+#  重要：本仓库刻意【不设置】 text=auto / eol 规则，并且把
+#  core.autocrlf 设为 false。原因是工程里的 .cs 必须保持
+#  UTF-8 with BOM + CRLF 原样，任何行尾自动转换都可能破坏
+#  BOM 或制造全文件级 diff 噪音。行尾由 Unity / 编辑器自行管理。
+#
+#  下面只标记二进制，作用有两个：
+#    1. 禁止 git 尝试做行尾转换（避免二进制被改坏）
+#    2. 让 git diff / git status 不把二进制当文本处理
+# ============================================================
+
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.bmp           binary
+*.tga           binary
+*.psd           binary
+*.exr           binary
+*.hdr           binary
+*.ttf           binary
+*.otf           binary
+*.woff          binary
+*.pdf           binary
+*.unitypackage  binary
+*.wav           binary
+*.mp3           binary
+*.ogg          binary
+*.mp4          binary
+*.dll          binary
+*.so            binary
+*.dylib         binary
+*.a             binary
+*.lib          binary
+*.mixer         binary

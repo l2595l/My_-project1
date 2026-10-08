@@ -1,0 +1,73 @@
+# ============================================================
+#  KardsLike · Unity 2022.3.62f1 LTS 专用忽略清单
+#  建立时间：2026-10-08
+#
+#  原则：只忽略「Unity / IDE 能自动重新生成」的东西。
+#  真正的源码与资产只有四处入库：
+#      Assets/  Docs/  ProjectSettings/  Packages/
+#  其中 Assets/KardsLike/ 是本项目自研内容（脚本 + Art + 字体）。
+#
+#  ⚠ 注意：.gitignore 不支持行尾注释，`#` 只有在行首才是注释。
+#    所以本文件所有说明都独占一行写在模式上方。
+# ============================================================
+
+# ---------- Unity 生成物（体积大头，绝不能入库）----------
+# 2.3 GB，Unity 全量导入缓存，删掉会自动重建
+[Ll]ibrary/
+# 临时编译与文件系统探测中间产物（游戏运行时会被占用）
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+# 引擎运行日志
+[Ll]ogs/
+# 每台机器各自的窗口布局，不该共享
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+sysinfo.txt
+*.stackdump
+
+# ---------- IDE 生成物（Unity 每次打开工程都会重写）----------
+# 198 MB
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# ---------- 打包产物 ----------
+*.apk
+*.aab
+*.unitypackage
+*.app
+ExportedObj/
+crashlytics-build.properties
+
+# ---------- 操作系统垃圾 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本项目专用 ----------
+# AI 栅格化 / 临时渲染的中间文件
+.ka_tmp/
+*.ka_tmp
+
+# ---------- 绝不忽略（写在这里是提醒：以下必须入库）----------
+# Assets/**/*.cs 与对应 .cs.meta —— 脚本改动要靠 git diff 证明
+# Assets/KardsLike/Art/** 与 CREDITS.txt —— 外部素材来源许可登记
+# Docs/*.md —— 设计文档是规则真相来源，必须随代码一起版本化
+# ProjectSettings/ 与 Packages/manifest.json + packages-lock.json
+# *.meta —— 漏掉任何 .meta 都会让 Unity 重新分配 GUID，导致引用全断
