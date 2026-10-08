@@ -257,6 +257,13 @@ namespace KardsLike.View
         /// 两个坐标系必须换算：旧位置在**旧行**里、目标位置在**新行**里（支援线 → 前线换了父节点），
         /// 所以先把旧的世界坐标用 `parent.InverseTransformPoint` 换算成新父节点下的局部坐标。
         /// 卡节点的轴心与锚点都是 (0.5,0.5) ⇒ 换算结果正好就是 `anchoredPosition`。
+        ///
+        /// ⚠️ **注意 `StartCoroutine` 会在同一帧里立刻跑到第一个 `yield`** ——
+        /// 也就是说"设好起点"和"走出第一帧"发生在**同一帧**，
+        /// 外部在启动后立刻读 `anchoredPosition`，读到的是**已经推进约 1.55%** 的值
+        /// （`SmoothStep(0.02 / 0.25) ≈ 1/55`），不是起点本身。
+        /// 这一点曾经把我误导成"换算有 1.8% 的缩放误差"——**其实是这一帧的进度**。
+        /// 要读真正的起点，得在调用 `SlideFrom` 之后、任何 `Step()` 之前读。
         /// </summary>
         private IEnumerator PlaySlide(RectTransform card, Vector3 fromWorld, float duration)
         {
