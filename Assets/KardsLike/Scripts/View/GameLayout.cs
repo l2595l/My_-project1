@@ -272,6 +272,10 @@ namespace KardsLike.View
             // "0.6 秒的飘字能跨越 AI 回合那 0.4 秒一次的整卡重建"的前提。
             EffectsLayer = UiKit.Stretch("EffectsLayer", root, 0f);
             Effects = EffectsLayer.gameObject.AddComponent<CardEffectLayer>();
+            // [兵种细化·坦克] 震屏要抖 `DesignFrame` —— 它是整个对局里唯一"只建一次、
+            // 且没有任何代码写它 anchoredPosition"的节点（只有 localScale 归 UpdateDesignScale 管）。
+            // 抖卡片或卡行都会被 Refresh 的整批重建腰斩，而且会把布局位置抖歪。
+            Effects.ShakeTarget = DesignFrame;
 
             // ---- 回合倒计时（阶段 2 · 任务 A）----
             BuildTurnTimer(root);
