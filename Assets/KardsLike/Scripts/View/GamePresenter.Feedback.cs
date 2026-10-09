@@ -459,8 +459,14 @@ namespace KardsLike.View
         }
 
         /// <summary>
-        /// [任务C-④] 播放攻击突刺（统一版）：攻击者朝目标方向冲一段再弹回。
+        /// [任务C-④] 播放攻击特效：攻击者朝目标方向冲一段再弹回，并按**兵种**决定
+        /// 冲多远、要不要附带命中效果（目前只有步兵有火花）。
         /// 同样必须在版面重建**之后**调。
+        ///
+        /// 兵种是从引擎状态读出来的（`UnitInstance.Def.UnitKind`）—— 仍然是"读结果"，
+        /// 不是重算规则：特效层只把它当一个**外观参数**用，绝不因此推断"该怎么打"。
+        /// 取不到时退回 `None`（= 统一版）；实际上走到这里的攻击者都还活着
+        /// （阵亡的话卡已不在版面上，上面那行 `continue` 早就跳过了）。
         /// </summary>
         private void PlayAttackLunges()
         {
@@ -475,8 +481,11 @@ namespace KardsLike.View
                 Vector2 targetDesign;
                 if (!TryFindAttackTargetDesign(_attackedIds[i], out targetDesign)) continue;
 
+                UnitInstance attacker = _engine.FindUnit(_attackedIds[i]);
+                UnitType kind = attacker == null ? UnitType.None : attacker.Def.UnitKind;
+
                 Vector3 targetWorld = fx.transform.TransformPoint(new Vector3(targetDesign.x, targetDesign.y, 0f));
-                fx.Lunge(rt, targetWorld);
+                fx.AttackEffect(rt, targetWorld, kind);
             }
         }
 
