@@ -85,6 +85,60 @@ namespace KardsLike.View
         /// <summary>轻震屏时长。</summary>
         public const float ScreenShakeBaseDuration = 0.18f;
 
+        // ---- [任务C-④·兵种细化] 火炮：屏幕外抛物线弹道 + 落点爆炸圈 ----
+        /// <summary>
+        /// 火炮整套表演的总时长（弹道 + 落地爆炸圈）。
+        /// 比坦克的 0.30s 长得多是**故意的**：炮弹要走完一整条弧线才落地，
+        /// 太快就只剩"闪了一下"，读不出"隔山打牛"。
+        /// </summary>
+        public const float ArtilleryShellDuration = 0.78f;
+        /// <summary>炮弹飞行占总时长的比例（其余留给落地爆炸圈）。</summary>
+        public const float ArtilleryFlightShare = 0.58f;
+        /// <summary>
+        /// 炮弹飞行的拱高（设计像素）。太小就退化成一条直线，看不出"抛物线"。
+        /// 与画框半高（540）比约 0.46 —— 弧顶落在画框内、但明显高于两端。
+        /// </summary>
+        private const float ShellArcHeight = 250f;
+        /// <summary>炮弹起点：画框左边界**再往外**这么远（保证"从屏幕外飞进来"）。</summary>
+        private const float ShellStartMargin = 210f;
+        /// <summary>炮弹起点相对目标抬高多少（让弧线从上方起、往下方落）。</summary>
+        private const float ShellStartLift = 70f;
+        /// <summary>炮弹大小（直径）。</summary>
+        private const float ShellSize = 15f;
+        /// <summary>拖尾挂在炮弹后方多远处（跟着速度方向走）。</summary>
+        private const float ShellTrail = 26f;
+        private static readonly Color ShellColor = new Color32(255, 226, 158, 255);
+        private static readonly Color ShellTrailColor = new Color32(255, 190, 110, 130);
+
+        /// <summary>爆炸圈：空心环的层数（多层错开 ⇒ 像连续几道冲击波）。</summary>
+        private const int BlastRingCount = 3;
+        /// <summary>
+        /// 爆炸圈：环贴图的像素直径。取得比显示尺寸大得多 —— 因为环带会随 `localScale`
+        /// 一起变粗，用"大贴图 + 小 scale"能把变粗压到不显眼（见 `PlayBlast` 的注释）。
+        /// </summary>
+        private const int BlastRingSprite = 200;
+        /// <summary>
+        /// 爆炸圈：环带宽度（贴图像素）。
+        /// 第一版取 8 —— 放大图一看环是"几道几乎看不见的细线"，整个爆炸读成了
+        /// "一个半透明的光球"（中心那个大白圆把所有注意力都吸走了）。
+        /// 加粗到 11，并把中心爆心缩小一半、提前熄灭（见 `BlastCoreSize`）。
+        /// </summary>
+        private const int BlastRingThickness = 11;
+        /// <summary>爆炸圈：每层环起始的缩放（很小 ⇒ 读起来是"从一个点炸开"）。</summary>
+        private const float BlastRingStartScale = 0.13f;
+        /// <summary>爆炸圈：最外层的结束缩放（直径 ≈ 236 设计像素 ≈ 两张卡宽）。</summary>
+        private const float BlastRingEndScale = 1.18f;
+        /// <summary>爆炸圈：相邻两层环错开的启动时间（占爆炸时长的比例）。</summary>
+        private const float BlastRingStaggerShare = 0.12f;
+        /// <summary>
+        /// 爆炸圈：中心爆心闪光的尺寸。
+        /// 第一版 56 太大了 —— 它盖住了整个卡面、还因为 alpha 慢慢降而一直糊在那里，
+        /// 于是"爆心"变成了"主角"。缩到 30 且只亮头 30% 的时间，它才是"起爆的那一下"。
+        /// </summary>
+        private const float BlastCoreSize = 30f;
+        private static readonly Color BlastRingColor = new Color32(255, 206, 122, 255);
+        private static readonly Color BlastCoreColor = new Color32(255, 248, 224, 255);
+
         /// <summary>
         /// 一个兵种的**攻击外观参数**。
         ///
@@ -110,6 +164,14 @@ namespace KardsLike.View
             public bool ScreenShake;
             /// <summary>是否在**目标**那一侧画命中火花。</summary>
             public bool ImpactSpark;
+            /// <summary>
+            /// 是否走"**屏幕外抛物线弹道**"（火炮）：**攻击者自己一步都不动**，
+            /// 炮弹从画框外划一道弧落到目标。开了它就不再走 `PlayAttack` 的"去 / 停 / 回"骨架
+            /// —— 那条骨架里全是位移，对"隔山打牛"全是空转。
+            /// </summary>
+            public bool ShellArc;
+            /// <summary>炮弹落点是否炸开一圈冲击波（爆炸圈）。</summary>
+            public bool Blast;
         }
 
         /// <summary>
@@ -138,6 +200,16 @@ namespace KardsLike.View
                 s.Hold = TankHold;
                 s.MuzzleFlash = true;
                 s.ScreenShake = true;
+            }
+            else if (kind == UnitType.Artillery)
+            {
+                // 隔山打牛：自己**一步都不动**（`Approach = 0`）——
+                // 炮弹从画框外划弧落下来，攻击者只是那条弹道的来源，画面上不需要位移。
+                // 这个选择顺带说明了一件事：它免反击、能打任意战线，与"待在原地开火"是同一个意思。
+                s.Approach = 0f;
+                s.Duration = ArtilleryShellDuration;
+                s.ShellArc = true;
+                s.Blast = true;
             }
 
             return s;
@@ -176,6 +248,15 @@ namespace KardsLike.View
             Vector2 targetLocal = LocalOf(targetWorld);
 
             AttackStyle style = StyleOf(kind);
+
+            // 火炮走的是另一条骨架：自己不位移，炮弹从画框外划弧落到目标。
+            // 它没有"去 / 停 / 回"这三个阶段，硬塞进 PlayAttack 只会让那段位移代码空转
+            // （approach = 0 ⇒ 起点＝终点），读代码的人还得自己推一遍才知道"它其实没动"。
+            if (style.ShellArc)
+            {
+                StartCoroutine(PlayShellArc(targetLocal, style.Duration, style.Blast));
+                return;
+            }
 
             StartCoroutine(PlayAttack(card, targetWorld, targetLocal,
                                       style.Duration / _speed, style.Hold / _speed,
@@ -511,6 +592,154 @@ namespace KardsLike.View
                 {
                     if (barImgs[i] == null) continue;
                     c = barImgs[i].color; c.a = alpha; barImgs[i].color = c;
+                }
+
+                yield return null;
+            }
+
+            if (root != null) Destroy(root.gameObject);
+        }
+
+        // ==================================================================
+        // [任务C-④·兵种细化] 火炮：屏幕外抛物线弹道 + 落点爆炸圈
+        // ==================================================================
+
+        /// <summary>
+        /// 屏幕外抛物线弹道：炮弹**从画框左外飞入**，拱到最高点后落向目标，落地炸开一圈冲击波。
+        /// 攻击者自己一动不动 —— 这是"隔山打牛"唯一的视觉答案。
+        ///
+        /// 抛物线用最朴素的"线性插值 + 正弦拱高"：`P(t) = Lerp(start, end, t) + up · arc · sin(πt)`。
+        /// 不用真实重力公式，因为这里要的是"**看得出是一条抛物线**"而不是物理正确；
+        /// 正弦还有个免费的好处：`sin` 在 0 与 π 处斜率平缓 ⇒ 起飞与落地都是软收，读起来像"抛出去的弹丸"。
+        ///
+        /// 起点固定在**画框左边界再往外**（与目标位置无关）—— 于是无论火炮打哪一格，
+        /// 玩家看到的都是"炮弹从屏幕外飞进来"，而不是"从某个刚好在框内的位置凭空出现"。
+        /// </summary>
+        private IEnumerator PlayShellArc(Vector2 targetLocal, float duration, bool blast)
+        {
+            if (duration <= 0f || _speed <= 0f) yield break;
+
+            float total = duration / _speed;
+            float flight = total * ArtilleryFlightShare;
+            if (flight <= 0f) yield break;
+
+            // 半宽取自**本层**的 rect（本层铺满画框），所以起点永远落在画框之外。
+            // 本类是 MonoBehaviour，`rect` 得从自己的 RectTransform 上取。
+            RectTransform self = transform as RectTransform;
+            if (self == null) yield break;
+            float startX = -(self.rect.width * 0.5f) - ShellStartMargin;
+            Vector2 start = new Vector2(startX, targetLocal.y + ShellStartLift);
+
+            RectTransform shell = UiKit.Anchored("Shell", transform,
+                                                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                 start, new Vector2(ShellSize, ShellSize));
+            UiKit.AddImage(shell, ShellColor, Mathf.RoundToInt(ShellSize * 0.5f));
+
+            // 拖尾：一个更小更淡的点，永远挂在炮弹的**后方** ——
+            // 15px 的圆点不给个"尾巴"，读不出它在往哪个方向飞。
+            RectTransform trail = UiKit.Anchored("Trail", transform,
+                                                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                 start, new Vector2(ShellSize * 0.8f, ShellSize * 0.8f));
+            UiKit.AddImage(trail, ShellTrailColor, Mathf.RoundToInt(ShellSize * 0.4f));
+
+            Vector2 prev = start;
+            float t = 0f;
+            while (t < flight)
+            {
+                t += Time.deltaTime;
+                if (shell == null || trail == null) yield break;
+
+                float k = Mathf.Clamp01(t / flight);
+                Vector2 p = Vector2.Lerp(start, targetLocal, k) + new Vector2(0f, Mathf.Sin(Mathf.PI * k) * ShellArcHeight);
+                shell.anchoredPosition = p;
+
+                // 尾巴的方向 = "上一帧 → 这一帧"的**反**方向（也就是来路），
+                // 比"直接指向起点"准：弧线中段的实际速度方向与起点方向差很远。
+                Vector2 back = prev - p;
+                if (back.sqrMagnitude < 0.01f) back = new Vector2(-1f, 1f);
+                trail.anchoredPosition = p + back.normalized * ShellTrail;
+                prev = p;
+
+                yield return null;
+            }
+
+            if (shell != null) Destroy(shell.gameObject);
+            if (trail != null) Destroy(trail.gameObject);
+
+            if (blast) StartCoroutine(PlayBlast(targetLocal, total - flight));
+        }
+
+        /// <summary>
+        /// 落点爆炸圈：`BlastRingCount` 层**空心环**依次向外扩散淡出，中心再补一下爆心闪光。
+        ///
+        /// 为什么必须是"环"而不是"实心圆"：冲击波的关键是**中间留空** ——
+        /// 实心圆扩散看起来像"原地长出一块东西"，空心环才读成"炸开的一道波"。
+        /// 所以这里用 `UiKit.Ring`（环带走有符号距离场生成的**空心**贴图）。
+        ///
+        /// ⚠️ 环带会随 `localScale` 一起变粗（`Image` 缩放绕不过去，环贴图也不能动态改厚度）：
+        /// 用**大直径贴图（200）+ 小 scale** 把这件事压到不显眼（环带从 ~1.4 到 ~7.8），
+        /// 再让 alpha 一路降到 0 ⇒ 读起来是"波散开了"，不是"圈变胖了"。
+        /// </summary>
+        private IEnumerator PlayBlast(Vector2 center, float duration)
+        {
+            if (duration <= 0f) yield break;
+
+            RectTransform root = UiKit.Anchored("Blast", transform,
+                                                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                center, new Vector2(1f, 1f));
+
+            RectTransform coreRt = UiKit.Anchored("Core", root,
+                                                  new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                  Vector2.zero, new Vector2(BlastCoreSize, BlastCoreSize));
+            Image core = UiKit.AddImage(coreRt, BlastCoreColor, Mathf.RoundToInt(BlastCoreSize * 0.5f));
+
+            Sprite ringSprite = UiKit.Ring(BlastRingSprite, BlastRingThickness);
+            RectTransform[] rings = new RectTransform[BlastRingCount];
+            Image[] ringImgs = new Image[BlastRingCount];
+            float[] ringDelay = new float[BlastRingCount];
+            float[] ringEnd = new float[BlastRingCount];
+
+            for (int i = 0; i < BlastRingCount; i++)
+            {
+                rings[i] = UiKit.Anchored("Ring" + i, root,
+                                          new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                          Vector2.zero, new Vector2(BlastRingSprite, BlastRingSprite));
+                ringImgs[i] = UiKit.AddSprite(rings[i], ringSprite, BlastRingColor);
+                rings[i].localScale = new Vector3(BlastRingStartScale, BlastRingStartScale, 1f);
+
+                ringDelay[i] = duration * BlastRingStaggerShare * i;
+                // 外层扩得更大（内层 0.55 × 终点、最外层 = 终点）⇒ 三道波拉开层次
+                float outer = BlastRingCount <= 1 ? 1f : (float)i / (BlastRingCount - 1);
+                ringEnd[i] = Mathf.Lerp(BlastRingEndScale * 0.55f, BlastRingEndScale, outer);
+            }
+
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                if (root == null) yield break;
+
+                // 爆心：只亮头 30%，迅速缩着炸开 —— 它是"起爆的那一下"，不是主角
+                float ck = Mathf.Clamp01(elapsed / Mathf.Max(0.01f, duration * 0.30f));
+                float cs = Mathf.Lerp(0.25f, 0.95f, Mathf.SmoothStep(0f, 1f, ck));
+                coreRt.localScale = new Vector3(cs, cs, 1f);
+                Color cc = core.color; cc.a = 1f - ck; core.color = cc;
+
+                for (int i = 0; i < BlastRingCount; i++)
+                {
+                    if (rings[i] == null || ringImgs[i] == null) continue;
+
+                    float span = Mathf.Max(0.01f, duration - ringDelay[i]);
+                    float k = Mathf.Clamp01((elapsed - ringDelay[i]) / span);
+                    float s = Mathf.Lerp(BlastRingStartScale, ringEnd[i], Mathf.SmoothStep(0f, 1f, k));
+                    rings[i].localScale = new Vector3(s, s, 1f);
+
+                    // 前 12% 保持全亮（否则一出生就在变淡，读起来像"本来就有的淡圈"），
+                    // 之后平滑降到 0（扩到最大时正好消失）。
+                    // 还没轮到的那层必须**完全透明**，否则会在中心先冒出三个小环（"提前起爆"的错读）。
+                    Color c = ringImgs[i].color;
+                    c.a = elapsed < ringDelay[i] ? 0f : (1f - Mathf.SmoothStep(0.12f, 1f, k));
+                    ringImgs[i].color = c;
                 }
 
                 yield return null;
