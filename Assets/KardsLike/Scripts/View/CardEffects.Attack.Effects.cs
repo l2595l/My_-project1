@@ -8,8 +8,8 @@ namespace KardsLike.View
     {
     /// <summary>
     /// 攻击特效的**实现**（[阶段2.5 · 任务C-④]）：坦克炮口闪光 + 轻震屏 / 步兵命中火花 /
-    /// 火炮屏幕外抛物线弹道 + 落点爆炸圈 / 战斗机弹道线。骨架与参数在
-    /// `CardEffects.Attack.cs`（本类的另一个 partial），拆分说明见那里顶部。
+    /// 火炮屏幕外抛物线弹道 + 落点爆炸圈 / 战斗机弹道线 / 轰炸机投弹 + 范围爆炸 + 强震屏。
+    /// 骨架与参数在 `CardEffects.Attack.cs`（本类的另一个 partial），拆分说明见那里顶部。
     /// </summary>
         /// <summary>
         /// 震屏要抖的节点（**由 `GameLayout` 赋成 `DesignFrame`**）。
@@ -114,7 +114,10 @@ namespace KardsLike.View
         }
 
         /// <summary>
-        /// 轻震屏：抖 `ShakeTarget`（=`DesignFrame`）。
+        /// 震屏：抖 `ShakeTarget`（=`DesignFrame`）。**不传参 = "轻"**（7px / 0.18s，坦克）；
+        /// 传参则按传入值（轰炸机的"强震屏" = 20px / 0.30s，由 `AttackStyle` 下发）。
+        /// **"0 = 用默认值"在这里收口** —— 两个调用方（PlayAttack / PlayBombRun）不必各判一次，
+        /// 且坦克那两个新字段是 0 ⇒ 行为与从前**逐位一致**。
         ///
         /// 两条与"抖卡片"不同的地方：
         ///   · **重复调用要先把上一次停掉并还原** —— 两次震屏叠在一起时，先启动的那个
@@ -123,9 +126,12 @@ namespace KardsLike.View
         ///   · 抖完 / 被 `ClearAll` 停掉时**都必须还原** —— 位置是布局给的，
         ///     震屏不还原就等于把整个界面搬走了（比卡片跑偏严重得多）。
         /// </summary>
-        public void ShakeScreen()
+        public void ShakeScreen(float amplitude = 0f, float duration = 0f)
         {
             if (!Enabled || ShakeTarget == null) return;
+
+            if (amplitude <= 0f) amplitude = ScreenShakeAmplitude;     // "轻"的默认幅度（7）
+            if (duration <= 0f) duration = ScreenShakeBaseDuration;    // "轻"的默认时长（0.18）
 
             if (_screenShakeRoutine != null)
             {
@@ -135,10 +141,10 @@ namespace KardsLike.View
             }
 
             _screenShakeBase = ShakeTarget.anchoredPosition;
-            _screenShakeRoutine = StartCoroutine(PlayScreenShake(ScreenShakeBaseDuration / _speed));
+            _screenShakeRoutine = StartCoroutine(PlayScreenShake(duration / _speed, amplitude));
         }
 
-        private IEnumerator PlayScreenShake(float duration)
+        private IEnumerator PlayScreenShake(float duration, float amplitude)
         {
             RectTransform target = ShakeTarget;
             if (target == null || duration <= 0f) { _screenShakeRoutine = null; yield break; }
@@ -152,9 +158,10 @@ namespace KardsLike.View
                 if (target == null) { _screenShakeRoutine = null; yield break; }
 
                 float decay = 1f - Mathf.Clamp01(elapsed / duration);
-                // 两个轴用不同频率，否则会读成"沿一条对角线来回"而不是"震"
-                float dx = Mathf.Cos(elapsed * 96f) * ScreenShakeAmplitude * decay;
-                float dy = Mathf.Sin(elapsed * 131f) * ScreenShakeAmplitude * 0.62f * decay;
+                // 两个轴用不同频率，否则会读成"沿一条对角线来回"而不是"震"。
+                // 幅度走参数（默认 7 = "轻"；轰炸机 20 = "强"）—— 频率不随兵种变，"震"的手感保持一致。
+                float dx = Mathf.Cos(elapsed * 96f) * amplitude * decay;
+                float dy = Mathf.Sin(elapsed * 131f) * amplitude * 0.62f * decay;
                 target.anchoredPosition = basePos + new Vector2(dx, dy);
                 yield return null;
             }
@@ -328,11 +335,17 @@ namespace KardsLike.View
             if (shell != null) Destroy(shell.gameObject);
             if (trail != null) Destroy(trail.gameObject);
 
-            if (blast) StartCoroutine(PlayBlast(targetLocal, total - flight));
+            // 参数化之后这里显式传"火炮自己的那一组数"—— 与参数化前逐位一致（1.18 / 3 / 30）
+            if (blast) StartCoroutine(PlayBlast(targetLocal, total - flight,
+                                                BlastRingEndScale, BlastRingCount, BlastCoreSize));
         }
 
         /// <summary>
-        /// 落点爆炸圈：`BlastRingCount` 层**空心环**依次向外扩散淡出，中心再补一下爆心闪光。
+        /// 落点爆炸圈：`ringCount` 层**空心环**依次向外扩散淡出，中心再补一下爆心闪光。
+        ///
+        /// ⚠️ 尺寸 / 层数 / 爆心**全部由调用方传入**（2026-10-09 参数化，为"范围爆炸"让路）：
+        ///   · 火炮 = `BlastRingEndScale / BlastRingCount / BlastCoreSize`（1.18 / 3 / 30，与参数化前逐位一致）
+        ///   · 轰炸机 = 乘上 `BomberBlastScale` 的更大一圈（1.83 / 4 / 38）—— "范围爆炸"就是这一组数差
         ///
         /// 为什么必须是"环"而不是"实心圆"：冲击波的关键是**中间留空** ——
         /// 实心圆扩散看起来像"原地长出一块东西"，空心环才读成"炸开的一道波"。
@@ -342,9 +355,11 @@ namespace KardsLike.View
         /// 用**大直径贴图（200）+ 小 scale** 把这件事压到不显眼（环带从 ~1.4 到 ~7.8），
         /// 再让 alpha 一路降到 0 ⇒ 读起来是"波散开了"，不是"圈变胖了"。
         /// </summary>
-        private IEnumerator PlayBlast(Vector2 center, float duration)
+        private IEnumerator PlayBlast(Vector2 center, float duration, float ringEndScale,
+                                      int ringCount, float coreSize)
         {
             if (duration <= 0f) yield break;
+            if (ringCount < 1) ringCount = 1;
 
             RectTransform root = UiKit.Anchored("Blast", transform,
                                                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
@@ -352,16 +367,16 @@ namespace KardsLike.View
 
             RectTransform coreRt = UiKit.Anchored("Core", root,
                                                   new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                                                  Vector2.zero, new Vector2(BlastCoreSize, BlastCoreSize));
-            Image core = UiKit.AddImage(coreRt, BlastCoreColor, Mathf.RoundToInt(BlastCoreSize * 0.5f));
+                                                  Vector2.zero, new Vector2(coreSize, coreSize));
+            Image core = UiKit.AddImage(coreRt, BlastCoreColor, Mathf.RoundToInt(coreSize * 0.5f));
 
             Sprite ringSprite = UiKit.Ring(BlastRingSprite, BlastRingThickness);
-            RectTransform[] rings = new RectTransform[BlastRingCount];
-            Image[] ringImgs = new Image[BlastRingCount];
-            float[] ringDelay = new float[BlastRingCount];
-            float[] ringEnd = new float[BlastRingCount];
+            RectTransform[] rings = new RectTransform[ringCount];
+            Image[] ringImgs = new Image[ringCount];
+            float[] ringDelay = new float[ringCount];
+            float[] ringEnd = new float[ringCount];
 
-            for (int i = 0; i < BlastRingCount; i++)
+            for (int i = 0; i < ringCount; i++)
             {
                 rings[i] = UiKit.Anchored("Ring" + i, root,
                                           new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
@@ -370,9 +385,9 @@ namespace KardsLike.View
                 rings[i].localScale = new Vector3(BlastRingStartScale, BlastRingStartScale, 1f);
 
                 ringDelay[i] = duration * BlastRingStaggerShare * i;
-                // 外层扩得更大（内层 0.55 × 终点、最外层 = 终点）⇒ 三道波拉开层次
-                float outer = BlastRingCount <= 1 ? 1f : (float)i / (BlastRingCount - 1);
-                ringEnd[i] = Mathf.Lerp(BlastRingEndScale * 0.55f, BlastRingEndScale, outer);
+                // 外层扩得更大（内层 0.55 × 终点、最外层 = 终点）⇒ 各道波拉开层次
+                float outer = ringCount <= 1 ? 1f : (float)i / (ringCount - 1);
+                ringEnd[i] = Mathf.Lerp(ringEndScale * 0.55f, ringEndScale, outer);
             }
 
             float elapsed = 0f;
@@ -387,7 +402,7 @@ namespace KardsLike.View
                 coreRt.localScale = new Vector3(cs, cs, 1f);
                 Color cc = core.color; cc.a = 1f - ck; core.color = cc;
 
-                for (int i = 0; i < BlastRingCount; i++)
+                for (int i = 0; i < ringCount; i++)
                 {
                     if (rings[i] == null || ringImgs[i] == null) continue;
 
@@ -490,6 +505,168 @@ namespace KardsLike.View
             }
 
             if (line != null) Destroy(line.gameObject);
+        }
+
+        // ==================================================================
+        // [任务C-④·兵种细化] 轰炸机：投弹（垂直下落）+ 范围爆炸 + 强震屏
+        // ==================================================================
+
+        /// <summary>
+        /// 高空投弹：炸弹**从画框上边界外垂直落到目标**，落地时范围爆炸（更大的空心环 + 碎片）
+        /// + **强震屏**。攻击者自己一动不动 —— 与火炮同一种"不进 PlayAttack 骨架"的选择。
+        ///
+        /// 为什么不让轰炸机飞过去：它的三样功能（投弹 / 范围爆炸 / 强震屏）全部发生在"目标头顶"，
+        /// 位移对这套表演是纯多余；而且**这条协程不读任何卡的节点**（只读目标坐标），
+        /// 天生不会被 AI 每 0.4s 一次的整卡重建截断 —— §21.3 那条"弹道线在低倍率下消失"
+        /// 的缺陷在这里是**构造性不存在**的（它根本不依赖卡）。
+        ///
+        /// 下落用 `k²`（纯匀加速）：起手慢、越落越快、落地正好全速 —— 一眼就是"重力"，
+        /// 与炮弹那条 `sin(πk)` 的抛物线**完全不同型**（自由落体 vs 抛射）。
+        /// 这也是三个空中/远程兵种各自的签名：火炮 = 从左侧划弧、战斗机 = 侧向拱弧、
+        /// 轰炸机 = **从天而降**。
+        /// </summary>
+        private IEnumerator PlayBombRun(Vector2 targetLocal, AttackStyle style)
+        {
+            if (style.Duration <= 0f || _speed <= 0f) yield break;
+
+            float total = style.Duration / _speed;
+            float fall = total * BomberFallShare;
+            if (fall <= 0f) yield break;
+
+            // 起点：画框**上边界再往外**（x 与目标对齐）—— 于是无论打哪一格，
+            // 玩家看到的都是"炸弹从天而降"，而不是"从某个刚好在框内的位置凭空出现"。
+            RectTransform self = transform as RectTransform;
+            if (self == null) yield break;
+            float startY = self.rect.height * 0.5f + BombStartMargin;
+            Vector2 start = new Vector2(targetLocal.x, startY);
+
+            // 弹体：细长胶囊（长度轴 = 局部 Y，垂直下落正好不用转）
+            RectTransform bomb = UiKit.Anchored("Bomb", transform,
+                                                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                start, new Vector2(BombWidth, BombLength));
+            UiKit.AddImage(bomb, BombColor, Mathf.RoundToInt(BombWidth * 0.5f));
+
+            // 尾翼：弹体上方一条横向短条 —— 下落时"后头"朝上，这是"炸弹"而不是"圆点"的关键。
+            // （挂在弹体下面当子节点 ⇒ 跟着弹体一起落，不用在循环里单独更新。）
+            RectTransform fin = UiKit.Anchored("Fin", bomb,
+                                               new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                               new Vector2(0f, BombLength * 0.5f),
+                                               new Vector2(BombFinWidth, BombFinHeight));
+            UiKit.AddImage(fin, BombFinColor, Mathf.RoundToInt(BombFinHeight * 0.5f));
+
+            // 速度线：尾翼更上方一道细线，随下落加快而变长、变亮 —— "越来越快"的可读线索
+            RectTransform streak = UiKit.Anchored("Streak", bomb,
+                                                  new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                  Vector2.zero, new Vector2(BombStreakWidth, 8f));
+            Image streakImg = UiKit.AddImage(streak, BombStreakColor, 1);
+
+            float t = 0f;
+            while (t < fall)
+            {
+                t += Time.deltaTime;
+                if (bomb == null) yield break;
+
+                float k = Mathf.Clamp01(t / fall);
+                // 匀加速下落：k² 在起手处几乎不动、在后段越来越快 —— 与真实重力的观感一致
+                float y = Mathf.Lerp(start.y, targetLocal.y, k * k);
+                bomb.anchoredPosition = new Vector2(targetLocal.x, y);
+
+                if (streak != null)
+                {
+                    float len = Mathf.Lerp(8f, 30f, k);
+                    streak.sizeDelta = new Vector2(BombStreakWidth, len);
+                    streak.anchoredPosition = new Vector2(0f, BombLength * 0.5f + BombFinHeight + len * 0.5f + 2f);
+                    if (streakImg != null)
+                    {
+                        Color c = streakImg.color;
+                        c.a = BombStreakColor.a * (0.35f + 0.65f * k);
+                        streakImg.color = c;
+                    }
+                }
+
+                yield return null;
+            }
+
+            if (bomb != null) Destroy(bomb.gameObject);   // 整棵子树（弹体 + 尾翼 + 速度线）一起销毁
+
+            // ---- 落地：范围爆炸 + 碎片 + 强震屏 ----
+            // 三样都从这里启动，且各自独立（震屏也由本协程直接点起 —— 它发生在"落地那一刻"
+            // 而不是"出手那一刻"，这是与坦克的炮口震屏在时间上最大的区别）。
+            // 全部挂在特效层上（本协程自带坐标，不引用任何卡节点）⇒ 低倍率下也不会被刷新截断。
+            float blastTime = Mathf.Max(0.01f, total - fall);
+            StartCoroutine(PlayBlast(targetLocal, blastTime,
+                                     BlastRingEndScale * BomberBlastScale, BomberBlastRings,
+                                     BomberBlastCoreSize));
+            StartCoroutine(PlayDebris(targetLocal, DebrisDuration / _speed));
+            if (style.ScreenShake) ShakeScreen(style.ShakeAmplitude, style.ShakeDuration);
+        }
+
+        /// <summary>
+        /// 范围爆炸的碎片：`DebrisCount` 块小碎片从爆心向四周飞散 —— 前段几乎匀速向外，
+        /// 后段受"重力"下坠（`− DebrisGravity · k²`），同时自转 + 淡出，结束后自毁。
+        ///
+        /// 与步兵火花的区别（两者都是"放射"，必须不同型）：火花是 6 条**等长细条**（读"火星"）；
+        /// 碎片是 6 块**大小不一、会自转、走下坠抛物线**的块（读"炸开的残骸"）。
+        /// 值也全部写死（不用随机）—— 效果层不做随机，测试才好逐帧复现。
+        /// </summary>
+        private IEnumerator PlayDebris(Vector2 center, float duration)
+        {
+            if (duration <= 0f) yield break;
+
+            RectTransform root = UiKit.Anchored("Debris", transform,
+                                                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                center, new Vector2(1f, 1f));
+
+            RectTransform[] pieces = new RectTransform[DebrisCount];
+            Image[] imgs = new Image[DebrisCount];
+            float[] angles = new float[DebrisCount];
+            float[] spins = new float[DebrisCount];
+
+            for (int i = 0; i < DebrisCount; i++)
+            {
+                // 起手偏 18°，免得有块正好压在水平/竖直轴上（那样看着像"刻度"而不是"炸开"）
+                float ang = 360f / DebrisCount * i + 18f;
+                angles[i] = ang * Mathf.Deg2Rad;
+                spins[i] = (i % 2 == 0 ? 1f : -1f) * (150f + 48f * i);   // 交替方向、转速各异
+
+                float size = DebrisSize[i];
+                pieces[i] = UiKit.Anchored("Piece" + i, root,
+                                           new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                           Vector2.zero, new Vector2(size, size));
+                pieces[i].localRotation = Quaternion.Euler(0f, 0f, ang);
+                imgs[i] = UiKit.AddImage(pieces[i], i % 2 == 0 ? DebrisColor : DebrisEmberColor, 2);
+            }
+
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                if (root == null) yield break;
+
+                float k = Mathf.Clamp01(elapsed / duration);
+                float fade = 1f - Mathf.Clamp01((k - 0.45f) / 0.55f);   // 后 55% 淡出
+
+                for (int i = 0; i < DebrisCount; i++)
+                {
+                    if (pieces[i] == null) continue;
+
+                    Vector2 dir = new Vector2(Mathf.Cos(angles[i]), Mathf.Sin(angles[i]));
+                    Vector2 p = dir * (DebrisSpeed[i] * k) + new Vector2(0f, -DebrisGravity * k * k);
+                    pieces[i].anchoredPosition = p;
+                    pieces[i].localRotation = Quaternion.Euler(0f, 0f, angles[i] * Mathf.Rad2Deg + spins[i] * k);
+
+                    if (imgs[i] != null)
+                    {
+                        Color c = imgs[i].color;
+                        c.a = fade;
+                        imgs[i].color = c;
+                    }
+                }
+
+                yield return null;
+            }
+
+            if (root != null) Destroy(root.gameObject);
         }
     }
 }

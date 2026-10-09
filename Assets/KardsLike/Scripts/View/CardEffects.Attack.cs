@@ -170,6 +170,62 @@ namespace KardsLike.View
         /// <summary>弹道线配色：接近纯白的暖色 —— 它要读成"一道曳光"，不是"一根边框"。</summary>
         private static readonly Color TracerColor = new Color32(255, 252, 236, 255);
 
+        // ---- [任务C-④·兵种细化] 轰炸机：投弹 + 范围爆炸 + 强震屏 ----
+        /// <summary>
+        /// 轰炸机整套表演的总时长（炸弹下落 + 落地爆炸）。
+        /// 比火炮的 0.78s 还长一点：炸弹要"从天而降"、爆炸还要铺开一大圈 ——
+        /// 这是五个兵种里最重的一套动作（最后一个，也是最响的一个）。
+        /// </summary>
+        public const float BomberStrikeDuration = 0.95f;
+        /// <summary>炸弹下落占总时长的比例（其余留给落地爆炸 + 碎片）。</summary>
+        public const float BomberFallShare = 0.58f;
+        /// <summary>炸弹弹体：细长胶囊（宽 × 长）。</summary>
+        private const float BombWidth = 14f;
+        private const float BombLength = 26f;
+        /// <summary>尾翼：弹体上方那道横向短条。下落时"后头"朝上 —— 它是"炸弹"而不是"圆点"的关键。</summary>
+        private const float BombFinWidth = 20f;
+        private const float BombFinHeight = 4f;
+        /// <summary>速度线：弹尾更上方一道随下落加快而变长的细线（"越落越快"的可读线索）。</summary>
+        private const float BombStreakWidth = 3f;
+        /// <summary>起点：画框**上边界再往外**这么远（x 与目标对齐 —— 垂直投弹，与火炮的"从左侧飞入"完全不同型）。</summary>
+        private const float BombStartMargin = 210f;
+        private static readonly Color BombColor = new Color32(222, 228, 238, 255);
+        private static readonly Color BombFinColor = new Color32(255, 214, 150, 255);
+        private static readonly Color BombStreakColor = new Color32(225, 232, 244, 180);
+
+        /// <summary>
+        /// [强震屏] 轰炸机落地时的震屏幅度与时长（设计像素 / 秒）。
+        /// "轻"是 7px / 0.18s（坦克）—— 强震屏接近三倍幅度、且更久（0.30s）。
+        /// 经 `AttackStyle.ShakeAmplitude / ShakeDuration` 下发，`ShakeScreen(amplitude, duration)` 收口。
+        /// </summary>
+        public const float StrongShakeAmplitude = 20f;
+        public const float StrongShakeDuration = 0.30f;
+
+        /// <summary>
+        /// 范围爆炸：环终点缩放的**倍率**（乘在火炮的 `BlastRingEndScale` 上）。
+        /// 火炮外圈 ≈ 236 设计像素（两张卡宽）；轰炸机 ≈ 366（三张多卡宽）——
+        /// "范围"这个词在画面上的全部含义就是这一条 + 多一层环 + 飞散的碎片。
+        /// </summary>
+        public const float BomberBlastScale = 1.55f;
+        /// <summary>范围爆炸：空心环层数（比火炮多一层 ⇒ 读成"一大圈波"而不是三道细环）。</summary>
+        public const int BomberBlastRings = 4;
+        /// <summary>范围爆炸：爆心闪光的尺寸（比火炮的 30 大一号 —— 毕竟这一次是整个弹体在炸）。</summary>
+        private const float BomberBlastCoreSize = 38f;
+
+        // ---- [任务C-④·兵种细化] 轰炸机：范围爆炸的碎片 ----
+        /// <summary>碎片数量（从爆心向四周飞散的小块）。</summary>
+        private const int DebrisCount = 6;
+        /// <summary>碎片飞散的总时长。</summary>
+        private const float DebrisDuration = 0.42f;
+        /// <summary>碎片的初始飞散速度（设计像素 / 整个时长）：按索引交替快慢 ⇒ 同一个圈上拉开层次。</summary>
+        private static readonly float[] DebrisSpeed = new float[] { 150f, 108f, 168f, 122f, 158f, 115f };
+        /// <summary>碎片在飞行后段的"下坠"幅度（`−g · k²`）：碎片不是直线飞出去的，是几块被炸上天又落下的残骸。</summary>
+        private const float DebrisGravity = 84f;
+        /// <summary>碎片边长（按索引大小交替 ⇒ 像碎块，而不是一圈等大的亮点）。</summary>
+        private static readonly float[] DebrisSize = new float[] { 11f, 7f, 13f, 8f, 10f, 6f };
+        private static readonly Color DebrisColor = new Color32(255, 210, 132, 255);
+        private static readonly Color DebrisEmberColor = new Color32(255, 168, 92, 255);
+
         /// <summary>
         /// 一个兵种的**攻击外观参数**。
         ///
@@ -212,6 +268,16 @@ namespace KardsLike.View
             public bool ShellArc;
             /// <summary>炮弹落点是否炸开一圈冲击波（爆炸圈）。</summary>
             public bool Blast;
+            /// <summary>
+            /// 是否走"**高空投弹**"（轰炸机）：**攻击者自己一步不动**，
+            /// 炸弹从画框上边界外垂直落到目标，落地时范围爆炸 + 强震屏。
+            /// 与 `ShellArc` 一样 —— 开了它就不再走 `PlayAttack` 骨架（那条骨架里全是位移）。
+            /// </summary>
+            public bool BombRun;
+            /// <summary>震屏幅度；**0 = 用"轻"震屏的默认值**（7px，由 `ShakeScreen` 收口判定）。</summary>
+            public float ShakeAmplitude;
+            /// <summary>震屏时长；**0 = 用默认值**（0.18s）。轰炸机的"强震屏" = 20px / 0.30s。</summary>
+            public float ShakeDuration;
         }
 
         /// <summary>
@@ -230,6 +296,9 @@ namespace KardsLike.View
             s.Tracer = false;
             s.ShellArc = false;
             s.Blast = false;
+            s.BombRun = false;
+            s.ShakeAmplitude = 0f;   // 0 = 用"轻"震屏的默认幅度（坦克没写过这两个字段 ⇒ 行为不变）
+            s.ShakeDuration = 0f;    // 0 = 用默认时长
 
             if (kind == UnitType.Infantry)
             {
@@ -265,6 +334,19 @@ namespace KardsLike.View
                 s.Arc = FighterArcShare;
                 s.Tracer = true;
             }
+            else if (kind == UnitType.Bomber)
+            {
+                // 高空轰炸：自己**一步不动**（与火炮同一种"不进骨架"的选择）——
+                // 炸弹从画框上方垂直落到目标，落地时范围爆炸 + 强震屏。
+                // 三样都在一条**自含的协程**（PlayBombRun）里完成：
+                // 连震屏都发生在"落地那一刻"而不是"出手那一刻"，这是与坦克的炮口震屏最大的区别。
+                s.Approach = 0f;
+                s.Duration = BomberStrikeDuration;
+                s.BombRun = true;
+                s.ScreenShake = true;
+                s.ShakeAmplitude = StrongShakeAmplitude;
+                s.ShakeDuration = StrongShakeDuration;
+            }
 
             return s;
         }
@@ -295,6 +377,15 @@ namespace KardsLike.View
             if (style.ShellArc)
             {
                 StartCoroutine(PlayShellArc(targetLocal, style.Duration, style.Blast));
+                return;
+            }
+
+            // 轰炸机同理不走骨架：炸弹垂直下落 + 落地范围爆炸 + 强震屏，
+            // 全部在 PlayBombRun 里自含完成 —— 传入 style 是为了让"落地那一刻"
+            // 能按 `AttackStyle` 里的参数点起震屏（它自己不认识 StrongShake 这些常量）。
+            if (style.BombRun)
+            {
+                StartCoroutine(PlayBombRun(targetLocal, style));
                 return;
             }
 
@@ -396,7 +487,9 @@ namespace KardsLike.View
                 Vector2 muzzle = MuzzleAt(lungeTo, targetLocal, parent, out shotAngle);
                 SpawnMuzzleFlash(muzzle, shotAngle);
             }
-            if (style.ScreenShake) ShakeScreen();
+            // 震屏幅度 / 时长从 `AttackStyle` 走；坦克没写过这两个字段（0）⇒ 落到"轻"的默认值，
+            // 行为与从前逐位一致。轰炸机在 PlayBombRun 里、于"落地那一刻"调用同一入口。
+            if (style.ScreenShake) ShakeScreen(style.ShakeAmplitude, style.ShakeDuration);
 
             t = 0f;
             while (t < hold)          // 停在最前（开火的那一下）
