@@ -255,6 +255,9 @@ namespace KardsLike.Core
             {
                 UnitInstance u = ai.SupportLine[i];
                 if (u.IsHq) continue;   // [STAGE2C] HQ 常驻支援线第 0 格，它不是可移动的单位
+                // [阶段2.5 · 任务D] 越线兵种（火炮/战斗机/轰炸机）不参与"抢前线"：
+                // 它们站在支援线上就能打任意目标 ⇒ 上前线收益为零，反而暴露给敌方支援线步兵。
+                if (GameEngine.IsLongRangeKind(u.Def.UnitKind)) continue;
                 // 能不能移入由引擎判定（部署失调 / 已行动 / 资源 / 容量 / 归属 / 是不是 HQ 都在里面）
                 if (!_engine.CanUnitMove(u, out reason)) continue;
 
@@ -276,7 +279,9 @@ namespace KardsLike.Core
         private IEnumerable<string> AttackPhase()
         {
             // ---- 阶段 A：支援阵线单位做**防守交换** ----
-            // 它们唯一够得着的目标就是敌方前线单位，所以这一阶段的语义等价于"把推上来的敌人清掉"。
+            // [阶段2.5 · 任务D] 候选池不再硬编码"敌方前线"：越线兵种（火炮/战斗机/轰炸机）
+            // 还能打到敌方支援线（含 HQ），步兵/坦克的边界照旧 —— **全部交给引擎判**
+            // （这才是 R4"AI 必须知道越线"的落点：放开过滤，让新射程真的进入 AI 的选择集）。
             // 第一轮只做白吃交换；第二轮放宽为"能击杀就换"。
             for (int round = 0; round < 2; round++)
             {
@@ -304,9 +309,11 @@ namespace KardsLike.Core
                         for (int t = 0; t < _enemyUnits.Count; t++)
                         {
                             UnitInstance tgt = _enemyUnits[t];
-                            if (tgt.Line != Line.Front) continue;
 
                             // 线位规则交给引擎判，AI 不复制一份
+                            // [阶段2.5 · 任务D] 旧版这里还有一道 `tgt.Line != Line.Front` 的硬过滤，
+                            // 它会让越线兵种永远看不到敌方支援线的目标（新射程在 AI 里等于没上线）；
+                            // 已删除 —— 合法性完全由 CanAttackTarget 判定（内含射程与拦截）。
                             if (!_engine.CanAttackTarget(atk, tgt, out reason)) continue;
 
                             bool kills = atk.Attack >= tgt.Health;

@@ -58,38 +58,75 @@ namespace KardsLike.Core
         }
 
         /// <summary>[STAGE2B] 这个单位此刻有没有**任何一个**合法攻击目标。
-        /// 渲染层用它把"能动但够不着任何人"的单位画成不可攻击，否则玩家点了没反应会更困惑。</summary>
+        /// 渲染层用它把"能动但够不着任何人"的单位画成不可攻击，否则玩家点了没反应会更困惑。
+        ///
+        /// [阶段2.5 · 任务D] 射程按兵种分岔后，"够得着谁"不再能由一条线位规则概括
+        /// （越线兵种任意战线、轰炸机还要过拦截）⇒ 支援线走泛化扫描 `FindAnyAttackTarget`，
+        /// 由 `CanAttackTarget` 逐候选作答。**本函数绝不自己复写射程或拦截。**</summary>
         public bool HasAttackTarget(UnitInstance u)
         {
             string reason;
             if (!CanUnitAct(u, out reason)) return false;
-            if (u.Line == Line.Front) return true;   // 前线单位至少够得着敌方 HQ
-            return FindFrontlineTargetFor(u) != null;
+            if (u.Line == Line.Front) return true;   // 前线单位至少够得着敌方 HQ（§6.1.1）
+            return FindAnyAttackTarget(u) != null;
         }
 
-        /// <summary>[STAGE2B] 支援阵线的单位能打谁：**只有**敌方前线单位。
-        /// 注意"敌方前线"等价于"前线被对方占领"，所以这里先比归属再扫列表。</summary>
-        private UnitInstance FindFrontlineTargetFor(UnitInstance u)
+        /// <summary>[阶段2.5 · 任务D] 泛化的"找一个合法目标"（取代原 FindFrontlineTargetFor）。
+        ///
+        /// 原版只扫敌方前线 —— 那对"步兵/坦克在支援线"仍然正确；但越线兵种
+        /// （火炮 / 战斗机 / 轰炸机）还能打到敌方支援线（含 HQ），轰炸机还要绕开拦截。
+        /// 所以改为：先前线、后支援线，每个候选都交给 `CanAttackTarget` 判。
+        ///
+        /// ⚠️ 必须**扫完才能判空** —— 不能"第一个候选被拦就返回 null"：
+        ///    被拦截的战线里，那架**战斗机本身**仍是合法目标（拦截只保护"其他目标"）。</summary>
+        private UnitInstance FindAnyAttackTarget(UnitInstance u)
         {
-            if (State.FrontlineOwner != 1 - u.OwnerIndex) return null;
-            for (int i = 0; i < State.Frontline.Count; i++)
+            string reason;
+
+            // ① 敌方前线：对步兵/坦克是唯一候选来源；对越线兵种是第一个候选
+            if (State.FrontlineOwner == 1 - u.OwnerIndex)
             {
-                if (State.Frontline[i].IsAlive) return State.Frontline[i];
+                for (int i = 0; i < State.Frontline.Count; i++)
+                {
+                    UnitInstance c = State.Frontline[i];
+                    if (c.IsAlive && CanAttackTarget(u, c, out reason)) return c;
+                }
+            }
+
+            // ② 敌方支援线（含 HQ）：只有越线兵种够得着
+            if (!IsLongRangeKind(u.Def.UnitKind)) return null;
+            PlayerState foe = State.Players[1 - u.OwnerIndex];
+            for (int i = 0; i < foe.SupportLine.Count; i++)
+            {
+                UnitInstance c = foe.SupportLine[i];
+                if (c.IsAlive && CanAttackTarget(u, c, out reason)) return c;
             }
             return null;
         }
 
+        /// <summary>[阶段2.5 · 任务D] **射程的唯一出口**：火炮 / 战斗机 / 轰炸机是越线兵种
+        /// （可打任意战线，含敌方 HQ）；步兵 / 坦克只能打"相邻战线"（§6.1.1 的陆路）。
+        /// 引擎判定、AI 适配、"有没有目标"的扫描**全部**经由这里 ——
+        /// 绝不允许出现第二处"兵种 → 射程"的映射。</summary>
+        internal static bool IsLongRangeKind(UnitType kind)
+        {
+            return kind == UnitType.Artillery || kind == UnitType.Fighter || kind == UnitType.Bomber;
+        }
+
         /// <summary>
-        /// [STAGE2B] 攻击方与目标单位的配对是否合法（三条战线的攻击关系，设计文档 §7.1）：
-        ///   · 前线单位   → 敌方前线 / 敌方支援阵线 / 敌方 HQ（任意敌方单位都够得着）
-        ///   · 支援线单位 → **只能**打敌方前线单位
+        /// [STAGE2B] 攻击方与目标单位的配对是否合法（设计文档 §6.1.1 / §7.1）。
         ///
-        /// 最后这条的推论是本作最重要的一条地理约束：**HQ 在支援阵线里，
-        /// 而支援线单位打不到支援线单位** ⇒ 抢下前线是打到 HQ 的唯一陆路。
+        /// [阶段2.5 · 任务D] 射程按兵种分岔，规则从"两条"变成"三条"：
+        ///   · 步兵 / 坦克（支援线）→ **只能**打敌方前线单位；
+        ///   · 步兵 / 坦克（前线）  → 敌方前线 / 敌方支援阵线 / 敌方 HQ（任意敌方单位都够得着）；
+        ///   · 火炮 / 战斗机 / 轰炸机（任意位置）→ **任意战线**的目标（含敌方 HQ）。
         ///
-        /// [STAGE2C] HQ 变成支援阵线里的一个**真实单位**之后，这条既有规则**无需修改**
-        /// 就自动覆盖了"打 HQ"：HQ 的 Line 是 Support，于是支援线单位打不到它、
-        /// 前线单位打得到它。`CanAttackHq` 现在只是这条规则对 HQ 的一个便捷包装（给 UI 用）。
+        /// "地面部队打 HQ 必须先抢前线"这条陆路约束由此**限定在步兵/坦克身上**
+        /// （设计文档 §7.1 的表述已同步降级为限定断言）。
+        /// 轰炸机还额外受**拦截**约束，见 `IsBombingIntercepted`。
+        ///
+        /// [STAGE2C] HQ 变成支援阵线里的一个**真实单位**后，"打 HQ"没有单写规则 ——
+        /// 它就是"打一个 Line == Support 的目标"，由射程分岔自然覆盖。
         /// </summary>
         public bool CanAttackTarget(UnitInstance attacker, UnitInstance target, out string reason)
         {
@@ -98,27 +135,71 @@ namespace KardsLike.Core
             if (!target.IsAlive) { reason = "目标已阵亡"; return false; }
             if (target.OwnerIndex == attacker.OwnerIndex) { reason = "不能攻击己方单位"; return false; }
 
-            if (attacker.Line == Line.Support && target.Line != Line.Front)
+            // 射程分岔：越线兵种不受线位限制；其余保持"支援线只能打敌方前线"
+            if (!IsLongRangeKind(attacker.Def.UnitKind)
+                && attacker.Line == Line.Support && target.Line != Line.Front)
             {
                 reason = "支援阵线的单位只能攻击敌方前线单位";
+                return false;
+            }
+
+            // 战斗机拦截（轰炸机专属）
+            if (IsBombingIntercepted(attacker, target))
+            {
+                reason = "目标所在战线有敌方战斗机拦截（轰炸机只能先攻击该战斗机）";
                 return false;
             }
             return true;
         }
 
-        /// <summary>[STAGE2B] 能不能攻击敌方 HQ：**只有站在前线的单位够得着**。
-        /// [STAGE2C] 语义上等价于 `CanAttackTarget(attacker, 敌方HQ单位)`，
-        /// 保留成独立函数只是为了让 UI 不必自己去取敌方 HQ 的单位实例。</summary>
+        /// <summary>
+        /// [阶段2.5 · 任务D] **战斗机拦截**：轰炸机攻击某目标时，若**目标所在战线**上
+        /// 有敌方（对轰炸机而言）战斗机、且目标本身不是战斗机 ⇒ 非法。
+        ///
+        /// 口径来源（四来源交叉核对，见《阶段2.5-任务D-规则复述与设计问答复核》§1.3）：
+        ///   · 「战斗机……拦截敌方轰炸机攻击同一阵线的**友军**」（Fandom 中文）；
+        ///   · 「必须将战斗机视为**首要攻击目标**并受到还击」（biligame wiki）；
+        ///   · 「轰炸机无法攻击**其他**目标」（萌娘百科）。
+        /// ⇒ **拦截保护的是"该战线上除战斗机外的其他目标"；战斗机本身是合法目标**
+        ///    （否则"轰炸机打战斗机要挨反击"这条已落地的例外会成为死代码）。
+        ///
+        /// 三条边界：
+        ///   · **逐线**生效 —— 只保护战斗机自己所在的战线（前线的保前线、支援线的保支援线）；
+        ///   · 只拦**轰炸机** —— 火炮 / 战斗机 / 步兵 / 坦克的攻击不受影响；
+        ///   · **HQ 也受保护** —— 它就在支援线上，属于"其他目标"。
+        /// </summary>
+        private bool IsBombingIntercepted(UnitInstance attacker, UnitInstance target)
+        {
+            if (attacker.Def.UnitKind != UnitType.Bomber) return false;
+            if (target.Def.UnitKind == UnitType.Fighter) return false;   // 战斗机本身可打（会挨反击）
+
+            // 目标所在战线：前线 / 该目标所有者的支援线（HQ 与支援线单位都在这条线上）
+            List<UnitInstance> line = target.Line == Line.Front
+                ? State.Frontline
+                : State.Players[target.OwnerIndex].SupportLine;
+
+            for (int i = 0; i < line.Count; i++)
+            {
+                UnitInstance c = line[i];
+                if (c.IsAlive && c.Def.UnitKind == UnitType.Fighter
+                    && c.OwnerIndex != attacker.OwnerIndex) return true;
+            }
+            return false;
+        }
+
+        /// <summary>[阶段2.5 · 任务D] 能不能攻击敌方 HQ —— **收口为一行**：
+        /// 语义完全等于 `CanAttackTarget(attacker, 敌方HQ单位)`，射程、拦截、文案
+        /// 与打普通目标**同一出口**，不可能写出两套规则。
+        /// 保留成独立函数只是为了让调用方（UI / AI）不必自己去取敌方 HQ 的单位实例。
+        ///
+        /// ⇒ 步兵/坦克的结果与旧版一致（支援线打不到 / 前线打得到）；
+        ///   火炮 / 战斗机 / 轰炸机在任意位置都能打（轰炸机照旧过拦截：
+        ///   HQ 所在支援线有敌方战斗机时打不了）。</summary>
         public bool CanAttackHq(UnitInstance attacker, out string reason)
         {
             reason = "";
             if (attacker == null) { reason = "单位不存在"; return false; }
-            if (attacker.Line != Line.Front)
-            {
-                reason = "只有前线单位可以攻击敌方 HQ";
-                return false;
-            }
-            return true;
+            return CanAttackTarget(attacker, State.Players[1 - attacker.OwnerIndex].Hq, out reason);
         }
 
         /// <summary>[STAGE2B] 判断某个单位能否移动上前线。</summary>

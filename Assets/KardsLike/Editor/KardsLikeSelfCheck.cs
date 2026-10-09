@@ -36,7 +36,7 @@ namespace KardsLike.EditorTools
             RunAll();
         }
 
-        /// <summary>跑完 9 项自检，返回是否全部通过。</summary>
+        /// <summary>跑完 10 项自检，返回是否全部通过。</summary>
         public static bool RunAll()
         {
             StringBuilder sb = new StringBuilder();
@@ -50,7 +50,7 @@ namespace KardsLike.EditorTools
             sb.AppendLine("- 对局模式：MatchMode.AiVsAi（自检没有 UI，需要自由驱动双方）");
             sb.AppendLine("- 覆盖：面板预算与兵种/行动费 / 资源上限 / 同种子可复现 / 终止性与先手偏差 / " +
                           "部署失调与每回合一次行动 / L1 判负 / 三条战线与行动费 / HQ 单位与疲劳结算 / " +
-                          "兵种反击例外");
+                          "兵种反击例外 / 越线射程与战斗机拦截");
             sb.AppendLine();
             sb.AppendLine("| # | 检查项 | 结果 |");
             sb.AppendLine("|---|---|---|");
@@ -84,6 +84,9 @@ namespace KardsLike.EditorTools
 
             bodies.Add(RunUnitTypeCounterRules(out var ok9, out string title9));
             titles.Add(title9); results.Add(ok9);
+
+            bodies.Add(RunLongRangeAndInterception(out var ok10, out string title10));
+            titles.Add(title10); results.Add(ok10);
 
             for (int i = 0; i < results.Count; i++)
             {
@@ -603,24 +606,33 @@ namespace KardsLike.EditorTools
 
             st.Players[0].Resources = 99;   // [STAGE2C] 行动费现在从资源扣，先给足额度让闸门检查有意义
 
-            string r1 = "", r2 = "", r3 = "";
+            // ⚠️ [阶段2.5 · 任务D] 夹具 `mySupport` 是**机枪阵地（步兵）** —— 下面三条线位结论
+            // 只代表"步兵/坦克"；越线兵种（火炮/战斗机/轰炸机）在支援线上可以打到支援线与 HQ，
+            // 它们的**对偶断言**在**第 10 项**。三行断言的文字已加"步兵"限定，防止报告说谎。
+            // ⚠️ r3 / r4 分开：早先两条断言共用 r3，"不能打 HQ"那行显示的是被后一个调用
+            // （CanUnitMove）覆盖掉的 reason —— 结论没错但理由错位，属于"报告说谎"，已修。
+            string r1 = "", r2 = "", r3 = "", r4 = "";
             bool isFrontOwner = st.FrontlineOwner == 1;
             bool supportCannotHitSupport = !eng.CanAttackTarget(mySupport, foeSupport, out r1);
             bool supportCanHitFront = eng.CanAttackTarget(mySupport, foeFront, out r2);
             bool supportCannotHitHq = !eng.CanAttackHq(mySupport, out r3);
-            bool cannotMoveIntoEnemyFront = !eng.CanUnitMove(mySupport, out r3);
+            bool cannotMoveIntoEnemyFront = !eng.CanUnitMove(mySupport, out r4);
 
-            sb.AppendLine("### 7.1 线位与攻击关系（棋盘：前线归电脑所有）");
+            sb.AppendLine("### 7.1 线位与攻击关系（棋盘：前线归电脑所有；攻击者 = 我方支援线的**步兵**）");
             sb.AppendLine();
             sb.AppendLine("| 检查 | 结果 |");
             sb.AppendLine("|---|---|");
             sb.AppendLine("| FrontlineOwner == 1（前线归电脑） | " + Mark(isFrontOwner) + " |");
-            sb.AppendLine("| 我方**支援线**单位不能打敌方支援线单位 | " + Mark(supportCannotHitSupport) +
+            sb.AppendLine("| 我方支援线**步兵**不能打敌方支援线单位 | " + Mark(supportCannotHitSupport) +
                           (r1.Length > 0 ? "<br>" + r1 : "") + " |");
-            sb.AppendLine("| 我方**支援线**单位可以打敌方前线单位 | " + Mark(supportCanHitFront) + " |");
-            sb.AppendLine("| 我方**支援线**单位不能打敌方 HQ | " + Mark(supportCannotHitHq) +
+            sb.AppendLine("| 我方支援线**步兵**可以打敌方前线单位 | " + Mark(supportCanHitFront) + " |");
+            sb.AppendLine("| 我方支援线**步兵**不能打敌方 HQ | " + Mark(supportCannotHitHq) +
                           (r3.Length > 0 ? "<br>" + r3 : "") + " |");
             sb.AppendLine("| 前线被电脑占领时我方无法移入 | " + Mark(cannotMoveIntoEnemyFront) + " |");
+            sb.AppendLine();
+            sb.AppendLine("> [阶段2.5 · 任务D] 以上三条的限定词是**步兵**（机枪阵地 = `unit_mg_nest`）——");
+            sb.AppendLine("> \"支援线限制\"只对**步兵/坦克**成立；越线兵种（火炮/战斗机/轰炸机）在支援线上");
+            sb.AppendLine("> 可以打到敌方支援线与 HQ，其**对偶断言**见**第 10 项**。");
             sb.AppendLine();
 
             // ---- 前线清空 → 归属回到无人占领；再验证行动点闸门 ----
@@ -1092,10 +1104,200 @@ namespace KardsLike.EditorTools
         }
 
         // ==================================================================
+        // 第 10 项 · 越线射程与战斗机拦截（[阶段2.5 · 任务D] 新增）
+        // ==================================================================
+
+        private static string RunLongRangeAndInterception(out bool ok, out string title)
+        {
+            title = "越线射程与战斗机拦截：火炮/战斗机/轰炸机可打任意战线（含 HQ）；" +
+                    "轰炸机不能打有敌方战斗机战线上的其他目标（战斗机本身可打）";
+            ok = false;
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("## 第 10 项 · 越线射程与战斗机拦截（设计文档 §13）");
+            sb.AppendLine();
+            sb.AppendLine("### 10.0 为什么必须手工摆棋盘");
+            sb.AppendLine();
+            sb.AppendLine("射程与拦截是**全称规则**（每一局的每一次攻击都要过这道判定），但组合正确性");
+            sb.AppendLine("在随机对局里几乎抽不齐（\"轰炸机正好被战斗机拦\"这类盘面很罕见）——");
+            sb.AppendLine("所以下面每条组合都用**独立构造的一局**来断言。");
+            sb.AppendLine();
+            sb.AppendLine("⚠️ **期望值全部硬编码**（合法性 bool 与 reason 关键词），绝不调用 `CanAttackTarget`");
+            sb.AppendLine("去算期望值 —— 那是循环论证，被测代码写错了也会通过（与第 9 项同一条纪律）。");
+            sb.AppendLine();
+            sb.AppendLine("夹具：`NewCounterFixture`（清空双方手牌与牌库、资源 99；本项不推进回合，不会触发疲劳），");
+            sb.AppendLine("用**池内真实卡**摆盘（本项断言的是合法性 bool，不依赖数值，不受以后调卡影响）。");
+            sb.AppendLine();
+
+            CardDef scout = CardDb.Get("unit_scout");       // 步兵 1/2
+            CardDef mg = CardDb.Get("unit_mg_nest");        // 步兵 2/3
+            CardDef howitzer = CardDb.Get("unit_howitzer"); // 火炮 6/5
+            CardDef fighter = CardDb.Get("unit_fighter");   // 战斗机 4/3
+            CardDef bomber = CardDb.Get("unit_bomber");     // 轰炸机 4/5
+
+            // ---- 10.1 射程分岔 ----
+            // 棋盘：我方支援线放四种攻击者；我方前线一个步兵；敌方支援线一个步兵（另有 HQ）。
+            GameEngine eng = NewCounterFixture(700);
+            UnitInstance foeSupportUnit = PlaceUnit(eng, scout, 1, Line.Support);
+            UnitInstance infFront = PlaceUnit(eng, scout, 0, Line.Front);
+            UnitInstance infSup = PlaceUnit(eng, mg, 0, Line.Support);
+            UnitInstance artSup = PlaceUnit(eng, howitzer, 0, Line.Support);
+            UnitInstance ftrSup = PlaceUnit(eng, fighter, 0, Line.Support);
+            UnitInstance bmbSup = PlaceUnit(eng, bomber, 0, Line.Support);
+
+            string r = "";
+            bool a1 = !eng.CanAttackTarget(infSup, foeSupportUnit, out r);   // 步兵（支援线）→ 敌方支援线：拒绝
+            string a1r = r;
+            bool a2 = !eng.CanAttackHq(infSup, out r);                       // 步兵（支援线）→ HQ：拒绝
+            string a2r = r;
+            bool a3 = eng.CanAttackHq(infFront, out r);                      // 步兵（前线）→ HQ：通过
+            bool a4 = eng.CanAttackTarget(artSup, foeSupportUnit, out r);    // 火炮 → 敌方支援线：通过
+            bool a5 = eng.CanAttackHq(artSup, out r);                        // 火炮 → HQ：通过
+            bool a6 = eng.CanAttackTarget(ftrSup, foeSupportUnit, out r);    // 战斗机 → 敌方支援线：通过
+            bool a7 = eng.CanAttackHq(ftrSup, out r);                        // 战斗机 → HQ：通过
+            bool a8 = eng.CanAttackTarget(bmbSup, foeSupportUnit, out r);    // 轰炸机 → 敌方支援线（无战斗机）：通过
+            bool a9 = eng.CanAttackHq(bmbSup, out r);                        // 轰炸机 → HQ（无战斗机）：通过
+
+            // ---- 10.2 战斗机拦截 ----
+            // 棋盘 B：敌方**前线**是"步兵 + 战斗机"（战斗机保护同线其他目标）
+            GameEngine engB = NewCounterFixture(701);
+            UnitInstance bmbB = PlaceUnit(engB, bomber, 0, Line.Support);
+            UnitInstance foeFrontInf = PlaceUnit(engB, scout, 1, Line.Front);
+            UnitInstance foeFrontFtr = PlaceUnit(engB, fighter, 1, Line.Front);
+
+            string rB = "";
+            bool b10 = !engB.CanAttackTarget(bmbB, foeFrontInf, out rB) && rB.Contains("拦截");
+            string b10r = rB;
+            bool b11 = engB.CanAttackTarget(bmbB, foeFrontFtr, out rB);      // 打那架战斗机本身：通过
+
+            // 棋盘 C：敌方**支援线**是"HQ + 战斗机"（战斗机保护 HQ 与支援线其他目标）
+            GameEngine engC = NewCounterFixture(702);
+            UnitInstance bmbC = PlaceUnit(engC, bomber, 0, Line.Support);
+            UnitInstance foeSupFtr = PlaceUnit(engC, fighter, 1, Line.Support);
+
+            string rC = "";
+            bool b12 = !engC.CanAttackHq(bmbC, out rC) && rC.Contains("拦截");   // 轰炸机 → HQ：拒绝
+            string b12r = rC;
+            bool b13 = engC.CanAttackTarget(bmbC, foeSupFtr, out rC);            // 打支援线的战斗机本身：通过
+
+            // 棋盘 D：敌方战斗机在**前线**、轰炸机打**敌方支援线**目标 —— 跨线不拦
+            GameEngine engD = NewCounterFixture(703);
+            UnitInstance bmbD = PlaceUnit(engD, bomber, 0, Line.Support);
+            PlaceUnit(engD, fighter, 1, Line.Front);           // 场景元素：另一条线（前线）上有敌方战斗机
+            UnitInstance foeSupInfD = PlaceUnit(engD, scout, 1, Line.Support);
+
+            string rD = "";
+            bool b14 = engD.CanAttackTarget(bmbD, foeSupInfD, out rD);       // 跨线：通过（拦截只保护同线）
+
+            // 棋盘 E：对照 —— 目标战线没有战斗机，轰炸机正常打
+            GameEngine engE = NewCounterFixture(704);
+            UnitInstance bmbE = PlaceUnit(engE, bomber, 0, Line.Support);
+            UnitInstance foeFrontE = PlaceUnit(engE, scout, 1, Line.Front);
+
+            string rE = "";
+            bool b15 = engE.CanAttackTarget(bmbE, foeFrontE, out rE);
+
+            // 棋盘 F：对照 —— 拦截只拦轰炸机：火炮打"有敌方战斗机的战线"目标不受影响
+            GameEngine engF = NewCounterFixture(705);
+            UnitInstance artF = PlaceUnit(engF, howitzer, 0, Line.Support);
+            PlaceUnit(engF, fighter, 1, Line.Front);           // 场景元素：该战线有敌方战斗机（但拦不了火炮）
+            UnitInstance foeFrontInfF = PlaceUnit(engF, scout, 1, Line.Front);
+
+            string rF = "";
+            bool b16 = engF.CanAttackTarget(artF, foeFrontInfF, out rF);
+
+            // ---- 10.3 端到端：被拦的攻击真的发生不了 ----
+            GameEngine engG = NewCounterFixture(706);
+            UnitInstance bmbG = PlaceUnit(engG, bomber, 0, Line.Support);
+            PlaceUnit(engG, fighter, 1, Line.Support);         // 场景元素：拦路的敌方战斗机（保护 HQ）
+
+            int logBefore = engG.State.Log.Count;
+            bool attackedG = engG.AttackWithUnit(bmbG.InstanceId, -1);   // 轰炸机打敌方 HQ（被支援线战斗机拦）
+            string lastLog = engG.State.Log.Count > logBefore
+                ? engG.State.Log[engG.State.Log.Count - 1] : "";
+            bool c17 = !attackedG && lastLog.Contains("拦截")
+                       && !bmbG.HasOperatedThisTurn                    // 行动没有被消耗
+                       && engG.State.Players[1].HqHealth == 20;        // HQ 一点血都没掉
+
+            // ---- 表格 ----
+            bool allRange = a1 && a2 && a3 && a4 && a5 && a6 && a7 && a8 && a9;
+            bool allIntercept = b10 && b11 && b12 && b13 && b14 && b15 && b16;
+
+            sb.AppendLine("### 10.1 射程分岔（9 条对偶断言）");
+            sb.AppendLine();
+            sb.AppendLine("| # | 场景（攻击者 → 目标） | 期望 | 实测 | 结果 |");
+            sb.AppendLine("|---|---|---|---|---|");
+            sb.AppendLine("| 1 | 步兵（支援线）→ 敌方支援线单位 | 拒绝 | " +
+                          (a1 ? "拒绝<br>" + a1r : "**通过 —— 差异！**") + " | " + Mark(a1) + " |");
+            sb.AppendLine("| 2 | 步兵（支援线）→ 敌方 HQ | 拒绝 | " +
+                          (a2 ? "拒绝<br>" + a2r : "**通过 —— 差异！**") + " | " + Mark(a2) + " |");
+            sb.AppendLine("| 3 | 步兵（前线）→ 敌方 HQ | 通过 | " +
+                          (a3 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a3) + " |");
+            sb.AppendLine("| 4 | **火炮**（支援线）→ 敌方支援线单位 | 通过 | " +
+                          (a4 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a4) + " |");
+            sb.AppendLine("| 5 | **火炮**（支援线）→ 敌方 HQ | 通过 | " +
+                          (a5 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a5) + " |");
+            sb.AppendLine("| 6 | **战斗机**（支援线）→ 敌方支援线单位 | 通过 | " +
+                          (a6 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a6) + " |");
+            sb.AppendLine("| 7 | **战斗机**（支援线）→ 敌方 HQ | 通过 | " +
+                          (a7 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a7) + " |");
+            sb.AppendLine("| 8 | **轰炸机**（支援线）→ 敌方支援线单位（无战斗机） | 通过 | " +
+                          (a8 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a8) + " |");
+            sb.AppendLine("| 9 | **轰炸机**（支援线）→ 敌方 HQ（无战斗机） | 通过 | " +
+                          (a9 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(a9) + " |");
+            sb.AppendLine();
+            sb.AppendLine("> 第 1~3 条是**对偶对照**：证明\"步兵/坦克保持相邻战线\"这条旧边界没有被越线规则误伤。");
+            sb.AppendLine();
+
+            sb.AppendLine("### 10.2 战斗机拦截（7 条）");
+            sb.AppendLine();
+            sb.AppendLine("| # | 场景 | 期望 | 实测 | 结果 |");
+            sb.AppendLine("|---|---|---|---|---|");
+            sb.AppendLine("| 10 | 轰炸机 → 敌方前线步兵（该线**有**敌方战斗机） | 拒绝（拦截） | " +
+                          (b10 ? "拒绝<br>" + b10r : "**通过 —— 差异！**") + " | " + Mark(b10) + " |");
+            sb.AppendLine("| 11 | 轰炸机 → **那架战斗机本身** | 通过 | " +
+                          (b11 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(b11) + " |");
+            sb.AppendLine("| 12 | 轰炸机 → 敌方 HQ（敌方支援线**有**战斗机） | 拒绝（拦截） | " +
+                          (b12 ? "拒绝<br>" + b12r : "**通过 —— 差异！**") + " | " + Mark(b12) + " |");
+            sb.AppendLine("| 13 | 轰炸机 → 敌方支援线的**战斗机本身** | 通过 | " +
+                          (b13 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(b13) + " |");
+            sb.AppendLine("| 14 | 敌方战斗机在**前线**，轰炸机打**敌方支援线**目标 | 通过（跨线不拦） | " +
+                          (b14 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(b14) + " |");
+            sb.AppendLine("| 15 | 对照：敌方无战斗机时，轰炸机正常打敌方前线目标 | 通过 | " +
+                          (b15 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(b15) + " |");
+            sb.AppendLine("| 16 | 对照：**火炮**打\"有敌方战斗机的战线\"上的目标 | 通过（拦截只拦轰炸机） | " +
+                          (b16 ? "通过" : "**拒绝 —— 差异！**") + " | " + Mark(b16) + " |");
+            sb.AppendLine();
+            sb.AppendLine("> 第 11 / 13 条是本轮**口径的关键**：\"拦截保护的是该战线上**除战斗机外**的其他目标\"——");
+            sb.AppendLine("> 若按\"不能攻击任何单位\"实现，这两条会失败，且「轰炸机打战斗机要挨反击」");
+            sb.AppendLine("> （第 9 项第 9 条）会变成永远不可达的死代码。");
+            sb.AppendLine();
+
+            sb.AppendLine("### 10.3 端到端：被拦的攻击真的发生不了（1 条）");
+            sb.AppendLine();
+            sb.AppendLine("| # | 场景 | 期望 | 实测 | 结果 |");
+            sb.AppendLine("|---|---|---|---|---|");
+            sb.AppendLine("| 17 | `AttackWithUnit`：轰炸机打被拦的敌方 HQ | 拒绝 + 日志含\"拦截\" + 未消耗行动 + HQ 未掉血 | " +
+                          (c17 ? "全部满足" : "**有差异！**") + " | " + Mark(c17) + " |");
+            sb.AppendLine();
+            sb.AppendLine("日志最后一条：" + (lastLog.Length > 0 ? lastLog : "（无）"));
+            sb.AppendLine();
+
+            ok = allRange && allIntercept && c17;
+
+            sb.AppendLine("**结论：" + (ok
+                ? "越线射程与战斗机拦截全部符合设计文档 §13 —— 火炮/战斗机/轰炸机可打任意战线（含 HQ）；"
+                  + "轰炸机不能打有敌方战斗机战线上的其他目标，但战斗机本身可打（拦截只拦轰炸机、只保护同线）。"
+                : "越线射程或拦截行为不符预期，详见上表。") + "**");
+            sb.AppendLine();
+            return sb.ToString();
+        }
+
+        // ==================================================================
         // 工具
         // ==================================================================
 
-        /// <summary>[阶段2.5 · 任务 A] 第 9 项的夹具：造一局、清空双方手牌与牌库、资源给足。
+        /// <summary>[阶段2.5 · 任务 A] 第 9 / 10 项的夹具：造一局、清空双方手牌与牌库、资源给足。
         /// 本项**不推进回合**，所以清空牌库不会触发疲劳结算，不会干扰断言。</summary>
         private static GameEngine NewCounterFixture(uint seed)
         {
