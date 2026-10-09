@@ -139,6 +139,35 @@ namespace KardsLike.View
         private static readonly Color BlastRingColor = new Color32(255, 206, 122, 255);
         private static readonly Color BlastCoreColor = new Color32(255, 248, 224, 255);
 
+        // ---- [任务C-④·兵种细化] 战斗机：斜向俯掠 + 弹道线 ----
+        /// <summary>
+        /// 战斗机**掠得最远**（走到两者距离的一半）。三个已细化兵种的推进深度连起来看就是
+        /// 一句兵种说明：步兵 0.22 是"捅一下"、统一版 0.35 是"推一下"、坦克 0.42 是"压上去"、
+        /// 战斗机 0.50 是"掠过"。
+        /// </summary>
+        public const float FighterLungeApproach = 0.50f;
+        /// <summary>战斗机最快（0.24s 对坦克 0.30s）—— "掠"这个动作本身就该是干脆的。</summary>
+        public const float FighterAttackDuration = 0.24f;
+        /// <summary>
+        /// 战斗机走位的**侧向拱高**（占"到目标距离"的比例）。
+        /// 这就是"**斜向**俯掠"这个说法的全部实现：位移不再是直线，而是沿一条**垂直于连线**的弧，
+        /// 半途侧偏最多。取值只有它自己一个，所以"撞过去"与"掠过去"的区别一眼可辨。
+        /// </summary>
+        public const float FighterArcShare = 0.42f;
+        /// <summary>弹道线的宽度（设计像素）。</summary>
+        private const float TracerWidth = 4f;
+        /// <summary>
+        /// 弹道线的总时长。
+        /// 第一版是 0.22s、生长占 45% —— 放大图一看，全长状态只维持一瞬，
+        /// 截到的那一帧线才 16 长（缩在两张卡之间几乎看不见）。改成 0.26s + 生长占 30%：
+        /// "打出一梭子"的感觉还在，但**全长状态占了后 70%**，肉眼有足够时间读到"这一条弹道"。
+        /// </summary>
+        private const float TracerDuration = 0.26f;
+        /// <summary>弹道线里"生长"阶段占的比例（其余是淡出）。</summary>
+        private const float TracerGrowShare = 0.30f;
+        /// <summary>弹道线配色：接近纯白的暖色 —— 它要读成"一道曳光"，不是"一根边框"。</summary>
+        private static readonly Color TracerColor = new Color32(255, 252, 236, 255);
+
         /// <summary>
         /// 一个兵种的**攻击外观参数**。
         ///
@@ -165,6 +194,15 @@ namespace KardsLike.View
             /// <summary>是否在**目标**那一侧画命中火花。</summary>
             public bool ImpactSpark;
             /// <summary>
+            /// 走位是**直线**还是**侧向拱起的弧**：值是拱高占"到目标距离"的比例（0 = 直线）。
+            ///
+            /// 战斗机靠它把"撞过去"变成"掠过去"—— 沿一条垂直于连线的弧冲向目标，
+            /// 侧偏最大发生在半途。**0 是默认值**，所以统一版与其它已细化兵种仍是直线。
+            /// </summary>
+            public float Arc;
+            /// <summary>是否在开火瞬间画一条**从攻击者到目标的弹道线**（战斗机）。</summary>
+            public bool Tracer;
+            /// <summary>
             /// 是否走"**屏幕外抛物线弹道**"（火炮）：**攻击者自己一步都不动**，
             /// 炮弹从画框外划一道弧落到目标。开了它就不再走 `PlayAttack` 的"去 / 停 / 回"骨架
             /// —— 那条骨架里全是位移，对"隔山打牛"全是空转。
@@ -186,6 +224,10 @@ namespace KardsLike.View
             s.MuzzleFlash = false;
             s.ScreenShake = false;
             s.ImpactSpark = false;
+            s.Arc = 0f;              // 0 = 直线：统一版与已细化的步兵 / 坦克 / 火炮都不走弧
+            s.Tracer = false;
+            s.ShellArc = false;
+            s.Blast = false;
 
             if (kind == UnitType.Infantry)
             {
@@ -210,6 +252,16 @@ namespace KardsLike.View
                 s.Duration = ArtilleryShellDuration;
                 s.ShellArc = true;
                 s.Blast = true;
+            }
+            else if (kind == UnitType.Fighter)
+            {
+                // "斜向俯掠"：走位从直线换成**侧向拱起的弧**（`Arc`），并在开火瞬间拖一条**弹道线**。
+                // 它的位移仍然走 `PlayAttack` 那条骨架（去 / 回），只是路径从弦换成了弧 ——
+                // 与火炮那种"连骨架都不用"是两回事：战斗机确实在位移，只是不走直线。
+                s.Approach = FighterLungeApproach;
+                s.Duration = FighterAttackDuration;
+                s.Arc = FighterArcShare;
+                s.Tracer = true;
             }
 
             return s;
@@ -258,32 +310,57 @@ namespace KardsLike.View
                 return;
             }
 
-            StartCoroutine(PlayAttack(card, targetWorld, targetLocal,
-                                      style.Duration / _speed, style.Hold / _speed,
-                                      style.Approach, style.MuzzleFlash, style.ScreenShake));
+            StartCoroutine(PlayAttack(card, targetWorld, targetLocal, style));
 
             if (style.ImpactSpark) SpawnSpark(ImpactPoint(targetLocal, attackerLocal));
+
+            // [战斗机] 弹道线**在这里启动，而不是在 `PlayAttack` 跑到位移最深处时创建**。
+            // 原因：攻击者的卡每次 `Refresh()` 都会被销毁重建，而 AI 回合每 0.4s 就刷新一次 ——
+            // 玩家把动画调慢（×0.5 / ×0.25）时，去程会长过 0.4s，动画协程在到达最深处之前
+            // 就被下一步刷新打断（`card == null` ⇒ yield break），弹道线于是**根本不会出现**。
+            // 实测 ×0.25 下 AI 侧完全看不到这条线 —— 而它正是这个兵种唯一的识别特征。
+            // 改成由本方法启动、自带"等到开火时刻"的延迟 ⇒ 特效的生命周期不再依赖另一个协程。
+            if (style.Tracer)
+            {
+                Transform tparent = card.parent;
+                if (tparent != null)
+                {
+                    // 起点 = 攻击者"冲到最深处"时的中心，换算到设计画框坐标
+                    Vector3 lt = tparent.InverseTransformPoint(targetWorld);
+                    Vector2 lungeTo = Vector2.Lerp(card.anchoredPosition,
+                                                   new Vector2(lt.x, lt.y), style.Approach);
+                    Vector2 fromDesign = LocalOf(tparent.TransformPoint(new Vector3(lungeTo.x, lungeTo.y, 0f)));
+                    float approachTime = (style.Duration - style.Hold) * 0.5f;   // 去程时长 = 开火时刻
+                    SpawnTracer(fromDesign, targetLocal, approachTime);
+                }
+            }
         }
 
         /// <summary>
-        /// 攻击位移：朝目标走一段（`approach` × 到目标的距离）→ 停在最深处（`hold`）→ 原路弹回，
+        /// 攻击位移：朝目标走一段（`style.Approach` × 到目标的距离）→ 停在最深处（`style.Hold`）→ 原路弹回，
         /// **结束时精确还原**。
         ///
-        /// 三个数字由调用方按兵种给出（`AttackStyle`）—— 步兵"捅得短"、坦克"推得深且停一下"，
-        /// 但**去 / 停 / 回的骨架完全共用**，所以细化工种不会各写一套动画
-        /// （那才是五份要分别维护的真值）。
+        /// 参数由 `AttackStyle` 整份传进来（而不是拆成一串 `bool` / `float`）——
+        /// 每加一个兵种都会加字段，拆开传的话签名会越来越长、而且"漏传一个"编译器不会拦
+        /// （`PlayAttack` 只管播，不知道哪个兵种该有什么）。
         ///
         /// 三个自制的硬规矩：
         ///   · 只走一部分，**不能真的走到目标身上** —— 否则两张卡会重叠成一坨
         ///   · 去与回都用 `SmoothStep`、收尾都软 ⇒ 像"刺一下"而不是"平移"；
         ///     回程结束时必须回到 `home`：位置是布局给的，不还原就等于改了布局
         ///   · **`hold` 是"到了、开火、再退回"里的那个停顿** —— 没有它，坦克就只是"突刺得深一点"，
-        ///     读不出兵种差别。炮口闪光与震屏都发生在这个瞬间（因为那时车体正好停在最前）
+        ///     读不出兵种差别。炮口闪光、弹道线与震屏都发生在这个瞬间（那时正好停在最前）
+        ///
+        /// [战斗机] `style.Arc > 0` 时，去 / 回都不再走直线，而是沿一条**垂直于连线**的弧：
+        /// `pos = Lerp(a, b, s) + perp · arc · sin(πs)`。两个端点处 `sin` 为 0 ⇒
+        /// 起点、最深处、终点都与直线版**完全重合**（所以"结束精确还原"这条不受影响），
+        /// 只有中段被侧向推开 —— 这就是"掠过去"与"撞过去"的全部差别。
         /// </summary>
         private IEnumerator PlayAttack(RectTransform card, Vector3 targetWorld, Vector2 targetLocal,
-                                       float duration, float hold, float approach,
-                                       bool muzzleFlash, bool screenShake)
+                                       AttackStyle style)
         {
+            float duration = style.Duration / _speed;
+            float hold = style.Hold / _speed;
             if (duration <= 0f) yield break;
 
             Transform parent = card.parent;
@@ -291,7 +368,18 @@ namespace KardsLike.View
 
             Vector2 home = card.anchoredPosition;
             Vector3 localTarget = parent.InverseTransformPoint(targetWorld);
-            Vector2 lungeTo = Vector2.Lerp(home, new Vector2(localTarget.x, localTarget.y), approach);
+            Vector2 targetV = new Vector2(localTarget.x, localTarget.y);
+
+            Vector2 lungeTo = Vector2.Lerp(home, targetV, style.Approach);
+
+            // 弧的"鼓向"：把"朝目标方向"逆时针转 90°。
+            // 选这个方向（而不是"固定朝上"）的理由：画框是 1920×1080 的横向矩形 ——
+            // 侧向推开的可用空间总比纵向大，所以无论目标在上下左右，这样鼓都不容易顶出画框。
+            Vector2 toTarget = targetV - home;
+            float dist = toTarget.magnitude;
+            Vector2 dir = dist > 0.001f ? toTarget / dist : Vector2.right;
+            Vector2 perp = new Vector2(-dir.y, dir.x);
+            float arc = dist * style.Arc;
 
             // 去 / 回各占"总时长减去停顿"的一半；hold 为 0 时退化成统一版的两段式
             float move = Mathf.Max(0f, (duration - hold) * 0.5f);
@@ -301,7 +389,7 @@ namespace KardsLike.View
             {
                 t += Time.deltaTime;
                 if (card == null) yield break;
-                card.anchoredPosition = Vector2.Lerp(home, lungeTo, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / move)));
+                card.anchoredPosition = ArcPoint(home, lungeTo, perp, arc, Mathf.Clamp01(t / move));
                 yield return null;
             }
 
@@ -309,16 +397,18 @@ namespace KardsLike.View
             card.anchoredPosition = lungeTo;
 
             // ---- 最深处：开火 ----
-            // 顺序有意义：先算炮口位置、再开震屏。因为炮口的局部坐标是"相对本层"的，
+            // 顺序有意义：先算炮口位置 / 弹道线、再开震屏。因为这两者的局部坐标都是"相对本层"的，
             // 而震屏抖的是本层的祖先（DesignFrame）—— 祖先的平移在相对换算里会约掉，
-            // 所以两者其实互不影响；但把"不需要抖的换算"放在抖之前总是更省心。
-            if (muzzleFlash)
+            // 所以其实互不影响；但把"不需要抖的换算"放在抖之前总是更省心。
+            if (style.MuzzleFlash)
             {
+                // 注意第二个参数要传 `targetLocal`（设计画框坐标）而不是 `targetV`：
+                // `MuzzleAt` 内部把"攻击者当前位置"也换算到设计画框坐标再相减，两者必须同一坐标系。
                 float shotAngle;
                 Vector2 muzzle = MuzzleAt(lungeTo, targetLocal, parent, out shotAngle);
                 SpawnMuzzleFlash(muzzle, shotAngle);
             }
-            if (screenShake) ShakeScreen();
+            if (style.ScreenShake) ShakeScreen();
 
             t = 0f;
             while (t < hold)          // 停在最前（开火的那一下）
@@ -333,11 +423,24 @@ namespace KardsLike.View
             {
                 t += Time.deltaTime;
                 if (card == null) yield break;
-                card.anchoredPosition = Vector2.Lerp(lungeTo, home, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / move)));
+                card.anchoredPosition = ArcPoint(lungeTo, home, perp, arc, Mathf.Clamp01(t / move));
                 yield return null;
             }
 
             if (card != null) card.anchoredPosition = home;
+        }
+
+        /// <summary>
+        /// 弧线上的一个点：`Lerp(a, b, s)` 再沿 `perp` 侧偏 `arc · sin(πs)`。
+        ///
+        /// `sin(πs)` 在 s = 0 与 s = 1 处都恰好为 0 ⇒ **两个端点与直线版逐位相同**，
+        /// 只有中段被推开。于是"只走到一部分"和"结束精确还原"这两条硬规矩在走弧时**自动继续成立**，
+        /// 不需要为弧线单写一套收尾逻辑。
+        /// </summary>
+        private static Vector2 ArcPoint(Vector2 a, Vector2 b, Vector2 perp, float arc, float k)
+        {
+            float s = Mathf.SmoothStep(0f, 1f, k);
+            return Vector2.Lerp(a, b, s) + perp * (arc * Mathf.Sin(Mathf.PI * s));
         }
 
         /// <summary>
@@ -746,6 +849,88 @@ namespace KardsLike.View
             }
 
             if (root != null) Destroy(root.gameObject);
+        }
+
+        // ==================================================================
+        // [任务C-④·兵种细化] 战斗机的弹道线
+        // ==================================================================
+
+        /// <summary>
+        /// 在"攻击者 → 目标"之间拖一条曳光。倍率 0 时调用方不会走到这里，这里再挡一道。
+        /// `delay` 是"等到开火时刻"的等待时长（= 去程时长，由调用方按兵种算好）。
+        /// </summary>
+        private void SpawnTracer(Vector2 from, Vector2 to, float delay)
+        {
+            if (!Enabled) return;
+            StartCoroutine(PlayTracer(from, to, delay / _speed, TracerDuration / _speed));
+        }
+
+        /// <summary>
+        /// 弹道线：一条**从攻击者长到目标**的细线（前 `TracerGrowShare` 生长、其余淡出）——
+        /// 读起来像一梭子曳光弹沿着那条轨迹打出去，而不是"凭空出现一根线"。
+        ///
+        /// `delay` 让它与动画的"开火时刻"对齐，**但它不依赖动画协程**：
+        /// 攻击者的卡每次 `Refresh()` 都会被销毁重建，而 AI 回合每 0.4s 刷新一次 ——
+        /// 把这条线挂在 `PlayAttack` 里的话，倍率调慢时协程会先被打断，线就再也不出现了。
+        /// 所以它自己等、自己长、自己淡出（挂在特效层上，不受卡重建影响）。
+        ///
+        /// 两个几何要点（都是这个项目踩过的那两个坑，这里再明确一次）：
+        ///   · **长度轴是"局部 Y"** ⇒ 想让线指向某个方向，旋转角必须是 `方向的极角 − 90°`
+        ///     （第一版炮口火舌就是照"角度 = 方向"写错的，见 §18.5）；
+        ///   · **轴心放在起点端**（`pivot = (0.5, 0)`）⇒ 让 `sizeDelta.y` 从 0 长到全长时，
+        ///     线是"从攻击者这边往目标长"，而不是"从中心往两头长"。
+        ///
+        /// 用 `AddImage(..., radius: 0)` 的直角贴图：它是一条线，不该有圆角。
+        /// </summary>
+        private IEnumerator PlayTracer(Vector2 from, Vector2 to, float delay, float duration)
+        {
+            if (duration <= 0f) yield break;
+
+            float wait = delay;
+            while (wait > 0f)
+            {
+                wait -= Time.deltaTime;
+                yield return null;
+            }
+
+            Vector2 delta = to - from;
+            float len = delta.magnitude;
+            if (len < 1f) yield break;          // 攻击者与目标几乎重合 ⇒ 画出来是个点，不如不画
+
+            float angle = Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg - 90f;
+
+            RectTransform line = UiKit.Anchored("Tracer", transform,
+                                                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f),
+                                                from, new Vector2(TracerWidth, 0f));
+            line.localRotation = Quaternion.Euler(0f, 0f, angle);
+            Image img = UiKit.AddImage(line, TracerColor, 0);
+
+            float grow = duration * TracerGrowShare;
+            float fade = Mathf.Max(0.01f, duration - grow);
+
+            float t = 0f;
+            while (t < grow)          // 生长：从攻击者往目标
+            {
+                t += Time.deltaTime;
+                if (line == null) yield break;
+                line.sizeDelta = new Vector2(TracerWidth, len * Mathf.Clamp01(t / grow));
+                yield return null;
+            }
+            if (line == null) yield break;
+            line.sizeDelta = new Vector2(TracerWidth, len);
+
+            t = 0f;
+            while (t < fade)          // 淡出（长度不动，只掉亮度）
+            {
+                t += Time.deltaTime;
+                if (line == null || img == null) yield break;
+                Color c = img.color;
+                c.a = 1f - Mathf.Clamp01(t / fade);
+                img.color = c;
+                yield return null;
+            }
+
+            if (line != null) Destroy(line.gameObject);
         }
     }
 }
