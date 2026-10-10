@@ -207,6 +207,49 @@ namespace KardsLike.View
         }
 
         /// <summary>
+        /// 生成（并缓存）一张**朝上的等腰三角形**白色贴图（箭头尖用）。
+        ///
+        /// [阶段2.6 · 任务2] 选中箭头 = "拉伸的细长矩形（线身）+ 这张三角（箭头尖）"——
+        /// 两个 Image 旋转/拉伸即可，不引入 `LineRenderer`（3D 组件，Overlay 下坐标换算别扭）。
+        /// 顶点朝 UI 的 +Y 方向；使用时把节点旋转到"指向目标"的角度即可。
+        /// 边缘沿用 Ring 的"半像素羽化"做抗锯齿（小尺寸下二值化会全是锯齿）。
+        /// </summary>
+        public static Sprite Triangle(int width, int height)
+        {
+            if (width < 2) width = 2;
+            if (height < 2) height = 2;
+
+            string key = "tri" + width + "x" + height;
+            Sprite cached;
+            if (_spriteCache.TryGetValue(key, out cached) && cached != null) return cached;
+
+            float halfW = width * 0.5f;
+            Color32[] px = new Color32[width * height];
+            for (int y = 0; y < height; y++)
+            {
+                // Texture2D 的 y=0 是**底部**：底边全宽、越往上越收窄（顶点朝上）
+                float t = (y + 0.5f) / height;
+                float half = halfW * (1f - t);
+                for (int x = 0; x < width; x++)
+                {
+                    float dx = Mathf.Abs(x + 0.5f - halfW);
+                    float a = Mathf.Clamp01(half - dx + 0.5f);
+                    px[y * width + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            }
+
+            Texture2D tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            tex.wrapMode = TextureWrapMode.Clamp;
+            tex.filterMode = FilterMode.Bilinear;
+            tex.SetPixels32(px);
+            tex.Apply();
+
+            Sprite s = Sprite.Create(tex, new Rect(0, 0, width, height), new Vector2(0.5f, 0.5f), 100f);
+            _spriteCache[key] = s;
+            return s;
+        }
+
+        /// <summary>
         /// 圆角矩形的有符号距离场覆盖率（0 = 完全在外，1 = 完全在内）。
         /// 用距离场而不是"逐像素判断在不在圆内"，是为了拿到 1 像素的抗锯齿边缘 ——
         /// 直接二值化会让圆角看起来全是锯齿。

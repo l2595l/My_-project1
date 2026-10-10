@@ -55,6 +55,11 @@ namespace KardsLike.View
         /// <summary>电脑回合 / 结算中，屏蔽玩家输入。</summary>
         private bool _busy;
 
+        // ---- [阶段2.6 · 任务2] 选中箭头 / 伤害预览 ----
+        /// <summary>手牌卡的界面节点（handIndex → RectTransform），与 `_unitRects` 同款用法：
+        /// "选中箭头"的起点坐标要用它来换算。每次 Refresh() 整体重建（卡被销毁重建）。</summary>
+        private readonly Dictionary<int, RectTransform> _handRects = new Dictionary<int, RectTransform>();
+
         // ---- 回合倒计时（阶段 2 · 任务 A）----
         /// <summary>
         /// 倒计时总开关。Play 时可在 Inspector 勾选，也可按 T 键即时切换。
@@ -107,9 +112,145 @@ namespace KardsLike.View
             if (Input.GetKeyDown(KeyCode.Y)) { CycleAnimSpeed(); }
             if (Input.GetKeyDown(KeyCode.Escape)) { _interaction.ClearSelection(); _interaction.Error = ""; Refresh(); }
 
+            // [阶段2.6 · 任务2] 选中箭头 + 伤害预览（纯表现层，每帧重画）。
+            // ⚠️ 这段只属于 View —— 引擎 / AI 永远不读鼠标（"同种子可复现"的契约）。
+            UpdateSelectionVisual();
+
             // 倒计时推进放在最后：它可能触发"超时自动结束回合"，
             // 那是本帧最重的一个动作，让按键处理先跑完。
             TickTurnTimer(Time.deltaTime);
+        }
+
+        /// <summary>
+        /// [阶段2.6 · 任务2] 选中态视觉：从"选中的卡"伸出一根箭头跟随鼠标；
+        /// 悬停到**合法**的敌方单位 / HQ 上时，双方卡面浮现"结算后血量"预览。
+        ///
+        /// 三条纪律（照提示词 2）：
+        ///   · **只在 View**：合法性问引擎的 `IsTargetable` / `PreviewAttack`，这里不重算任何规则
+        ///   · **只在玩家可交互时**显示（电脑回合 / 结算中 / 对局结束 / 没选择 —— 一律隐藏）
+        ///   · **只存坐标、不引用卡节点**（卡每次 Refresh 被整批重建，引用就会打穿）
+        /// </summary>
+        private void UpdateSelectionVisual()
+        {
+            CardEffectLayer fx = _layout.Effects;
+            if (fx == null) return;
+
+            // ---- 不满足显示条件：全部收掉 ----
+            if (!_interaction.CanInteract())
+            {
+                fx.HideArrow();
+                fx.ClearPreviews();
+                return;
+            }
+
+            // ---- 箭头起点：选中的手牌 or 选中的单位（节点找不到 → 收掉）----
+            Vector2 from;
+            UnitInstance selUnit = null;
+            if (_interaction.SelHand >= 0)
+            {
+                RectTransform handRt;
+                if (!_handRects.TryGetValue(_interaction.SelHand, out handRt) || handRt == null)
+                {
+                    fx.HideArrow(); fx.ClearPreviews(); return;
+                }
+                from = fx.LocalOf(handRt);
+            }
+            else if (_interaction.SelUnitId >= 0)
+            {
+                selUnit = _engine.FindUnit(_interaction.SelUnitId);
+                RectTransform unitRt;
+                if (selUnit == null
+                    || !_unitRects.TryGetValue(_interaction.SelUnitId, out unitRt) || unitRt == null)
+                {
+                    fx.HideArrow(); fx.ClearPreviews(); return;
+                }
+                from = fx.LocalOf(unitRt);
+            }
+            else
+            {
+                fx.HideArrow(); fx.ClearPreviews(); return;
+            }
+
+            // ---- 终点：鼠标位置（ScreenSpaceOverlay ⇒ 相机参数传 null）----
+            Vector2 to;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                    (RectTransform)fx.transform, Input.mousePosition, null, out to))
+            {
+                fx.HideArrow(); fx.ClearPreviews(); return;
+            }
+
+            // ---- 悬停判定 + 合法性（数量全部来自引擎的 PreviewAttack / IsTargetable）----
+            UnitInstance hover = FindHoveredEnemy(Input.mousePosition);
+            bool legal = false;
+            bool hasPreview = false;
+            int dmgToTarget = 0;
+            int dmgToAttacker = 0;
+            if (hover != null)
+            {
+                if (selUnit != null)
+                {
+                    int targetId = hover.IsHq ? -1 : hover.InstanceId;
+                    legal = _engine.PreviewAttack(selUnit.InstanceId, targetId,
+                                                  out dmgToTarget, out dmgToAttacker);
+                    hasPreview = legal;
+                }
+                else
+                {
+                    legal = _interaction.IsTargetable(hover);
+                }
+            }
+
+            fx.ShowArrow(from, to, hover == null || legal);
+
+            // ---- 预览浮窗：反击为 0 时 ShowPreview 内部自动隐藏（这里不写任何兵种 if）----
+            if (hasPreview && selUnit != null && hover != null)
+            {
+                RectTransform tgtRt = null;
+                if (hover.IsHq) tgtRt = _layout.EnemyHq.Root;
+                else _unitRects.TryGetValue(hover.InstanceId, out tgtRt);
+
+                RectTransform atkRt;
+                _unitRects.TryGetValue(selUnit.InstanceId, out atkRt);
+
+                Vector2 lift = new Vector2(0f, 96f);
+                if (tgtRt != null)
+                {
+                    fx.ShowPreview(1, fx.LocalOf(tgtRt) + lift,
+                                   dmgToTarget, hover.Health - dmgToTarget);
+                }
+                if (atkRt != null)
+                {
+                    fx.ShowPreview(0, fx.LocalOf(atkRt) + lift,
+                                   dmgToAttacker, selUnit.Health - dmgToAttacker);
+                }
+            }
+            else
+            {
+                fx.ClearPreviews();
+            }
+        }
+
+        /// <summary>[阶段2.6 · 任务2] 鼠标当前悬停的敌方单位 / 敌方 HQ（都没有则返回 null）。
+        ///
+        /// 纯几何命中测试 —— 不接 EventSystem：卡每次 Refresh 被整批重建，
+        /// 给每张卡挂 PointerEnter 都得重新接线；而按矩形反查只依赖"卡 → rect"
+        /// 这一份既有字典（≤ 11 项，每帧扫完无压力）。</summary>
+        private UnitInstance FindHoveredEnemy(Vector3 screenPos)
+        {
+            foreach (KeyValuePair<int, RectTransform> kv in _unitRects)
+            {
+                if (kv.Value == null) continue;
+                if (!RectTransformUtility.RectangleContainsScreenPoint(kv.Value, screenPos, null)) continue;
+                UnitInstance u = _engine.FindUnit(kv.Key);
+                if (u != null && u.OwnerIndex != _engine.State.CurrentPlayer) return u;
+            }
+
+            if (_layout.EnemyHq.Root != null
+                && RectTransformUtility.RectangleContainsScreenPoint(_layout.EnemyHq.Root, screenPos, null))
+            {
+                return _engine.State.Players[1].Hq;
+            }
+            return null;
         }
 
         private static uint NewSeed()
@@ -177,6 +318,7 @@ namespace KardsLike.View
             CollectUnitActionEvents();
 
             _unitRects.Clear();
+            _handRects.Clear();
             _layout.ClearSpawned();
 
             GameState s = _engine.State;
@@ -402,6 +544,7 @@ namespace KardsLike.View
 
                 CardView v = CardView.CreateHandCard(_layout.HandRow, pos, i, def, playable, selected,
                                                      _interaction.OnHandCardClicked);
+                _handRects[i] = v.Rect;   // [阶段2.6 · 任务2] 箭头起点要按选中的手牌定位
                 _layout.Track(v.Rect.gameObject);
             }
         }

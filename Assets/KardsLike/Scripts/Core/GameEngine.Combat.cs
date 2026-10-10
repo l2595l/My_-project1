@@ -202,6 +202,43 @@ namespace KardsLike.Core
             return CanAttackTarget(attacker, State.Players[1 - attacker.OwnerIndex].Hq, out reason);
         }
 
+        /// <summary>[阶段2.6 · 任务2] **只读攻击预览**：这一下打出去，双方各掉多少血。
+        ///
+        /// 供**表现层**在悬停合法目标时显示"结算后血量"（阶段 2.6 的选中箭头 + 伤害预览）。
+        /// 为什么不把 `CounterDamage` 直接改成 public：它的 `internal` 边界是刻意的
+        /// （只让同程序集的引擎与 AI 用得到）；这里只加一个**转发式的只读查询**，
+        /// 判定仍然全部走 `CanUnitAttack` + `CanAttackTarget` + `CounterDamage` 这三个既有出口。
+        ///
+        /// ⚠️ **绝对不允许 View 自己重算伤害**（本项目已因"两套语义"踩过两次：F2 精准打击归属、
+        /// F6 召唤失调）。"火炮免反击""轰炸机免反击""轰炸机打战斗机挨反击"这些例外
+        /// 只能在 `CounterDamage` 里存在一份。
+        ///
+        /// targetUnitInstanceId 传负数表示敌方 HQ（与 `AttackWithUnit` 的约定一致）。
+        /// 返回 false 时两个 out 参数都是 0（调用方不应显示任何预览）。
+        /// </summary>
+        public bool PreviewAttack(int attackerInstanceId, int targetUnitInstanceId,
+                                  out int damageToTarget, out int damageToAttacker)
+        {
+            damageToTarget = 0;
+            damageToAttacker = 0;
+
+            UnitInstance attacker = FindUnit(attackerInstanceId);
+            if (attacker == null) return false;
+
+            // 与 AttackWithUnit 完全同一套校验：能不能行动（归属 / 失调 / 已行动 / 资源）+ 目标是否合法
+            string reason;
+            if (!CanUnitAttack(attacker, out reason)) return false;
+
+            UnitInstance target = ResolveAttackTarget(attacker, targetUnitInstanceId);
+            if (target == null) return false;
+            if (!CanAttackTarget(attacker, target, out reason)) return false;
+
+            // 与 AttackWithUnit 里那两行**同源的数值**（攻击者攻击力 + CounterDamage 收口）
+            damageToTarget = attacker.Attack;
+            damageToAttacker = CounterDamage(attacker, target);
+            return true;
+        }
+
         /// <summary>[STAGE2B] 判断某个单位能否移动上前线。</summary>
         public bool CanUnitMove(UnitInstance u, out string reason)
         {

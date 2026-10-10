@@ -164,6 +164,188 @@ namespace KardsLike.View
             return new Vector2(local.x, local.y);
         }
 
+        // ==================================================================
+        // [阶段2.6 · 任务2] 选中视觉：箭头 + 伤害预览
+        // ==================================================================
+        // 两者都挂在**本组件自己**（= EffectsLayer）下 —— 它不参与 Track()/ClearSpawned()
+        // 的整批销毁，所以卡牌每次 Refresh() 重建时不会把它们顺带删掉；
+        // 反过来，箭头 / 预览**从不引用任何卡的节点**（只存坐标），卡重建也打不穿它们。
+        // 由 GamePresenter.Update() 每帧驱动（条件不满足时自动隐藏，见 UpdateSelectionVisual）。
+        //
+        // ⚠️ 配色与提示词建议的差异（有意，记录在案）：提示词说"默认深色（Kards 实际是深色箭头）"，
+        // 但那建立在 Kards 的**浅色战场**上；本项目的界面底色是深蓝灰（15,19,26），
+        // 深色箭头直接不可见 ⇒ 改为"亮色线身 + 金色箭头尖"（沿用界面既有色板），非法目标变灰。
+
+        /// <summary>箭头线身颜色（亮色；见上方说明为何不用"深色"）。</summary>
+        private static readonly Color ArrowColor = new Color32(226, 232, 240, 225);
+        /// <summary>非法目标时的箭头颜色（灰、半透明）。</summary>
+        private static readonly Color ArrowInvalidColor = new Color32(122, 132, 148, 150);
+        /// <summary>箭头尖颜色（金色，与 UiKit.Accent 同源）。</summary>
+        private static readonly Color ArrowTipColor = new Color32(201, 165, 74, 235);
+
+        private const float ArrowShaftWidth = 7f;
+        private const float ArrowTipWidth = 26f;
+        private const float ArrowTipHeight = 30f;
+        /// <summary>预览副行（"剩 X"）字号；主行沿用伤害飘字的 46px 规格。</summary>
+        private const float PreviewSubFontSize = 26f;
+
+        private RectTransform _arrowShaft;
+        private Image _arrowShaftImg;
+        private RectTransform _arrowTip;
+        private Image _arrowTipImg;
+
+        private RectTransform _previewAtk;
+        private TextMeshProUGUI _previewAtkValue;
+        private TextMeshProUGUI _previewAtkSub;
+        private RectTransform _previewTgt;
+        private TextMeshProUGUI _previewTgtValue;
+        private TextMeshProUGUI _previewTgtSub;
+
+        /// <summary>[阶段2.6 · 任务2] 显示 / 更新选中箭头。from / to 都是**本层局部坐标**。
+        ///
+        /// 不自行插值：与鼠标同帧调用 —— 光标的移动本身就是连续的。
+        /// `legal` = 当前悬停目标是否可攻击（由调用方经引擎判定后传入），
+        /// 只影响配色（可打 = 亮色，非法 = 灰），**不改变任何规则**。</summary>
+        public void ShowArrow(Vector2 from, Vector2 to, bool legal)
+        {
+            EnsureArrowNodes();
+            if (_arrowShaft == null || _arrowTip == null) return;
+
+            Vector2 d = to - from;
+            float len = d.magnitude;
+            if (len < 26f)   // 离得太近就不画（否则线身缩成一个方块，读不出"指向"）
+            {
+                HideArrow();
+                return;
+            }
+
+            _arrowShaft.gameObject.SetActive(true);
+            _arrowTip.gameObject.SetActive(true);
+
+            // 矩形（Image）的长度轴是**局部 Y** ⇒ 想让节点"指向 d 的方向"，
+            // 旋转角 = d 的极角 − 90°（坦克炮口火舌那轮踩过的坑，见任务 C 文档 §18.5）。
+            float deg = Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg - 90f;
+            Vector2 dir = d / len;
+
+            _arrowShaftImg.color = legal ? ArrowColor : ArrowInvalidColor;
+            _arrowTipImg.color = legal ? ArrowTipColor : ArrowInvalidColor;
+
+            // 线身：从 from 出发、长度到箭头尖内部多一点（避免接缝）；矩形中心 = 起点 + 方向×半长
+            float shaftLen = len - ArrowTipHeight * 0.72f;
+            if (shaftLen < 4f) shaftLen = 4f;
+            _arrowShaft.sizeDelta = new Vector2(ArrowShaftWidth, shaftLen);
+            _arrowShaft.anchoredPosition = from + dir * (shaftLen * 0.5f);
+            _arrowShaft.localRotation = Quaternion.Euler(0f, 0f, deg);
+
+            // 箭头尖：中心回退半个尖长 —— 让**尖端**正好落在 to 上
+            _arrowTip.sizeDelta = new Vector2(ArrowTipWidth, ArrowTipHeight);
+            _arrowTip.anchoredPosition = to - dir * (ArrowTipHeight * 0.5f);
+            _arrowTip.localRotation = Quaternion.Euler(0f, 0f, deg);
+        }
+
+        /// <summary>隐藏箭头（取消选择 / 电脑回合 / 不满足显示条件时调用）。</summary>
+        public void HideArrow()
+        {
+            if (_arrowShaft != null) _arrowShaft.gameObject.SetActive(false);
+            if (_arrowTip != null) _arrowTip.gameObject.SetActive(false);
+        }
+
+        /// <summary>[阶段2.6 · 任务2] 显示 / 更新一格伤害预览浮窗。
+        /// slot：0 = 攻击者侧，1 = 目标侧。
+        ///
+        /// **damage ≤ 0 时自动隐藏该格** —— 这正是"数量由引擎算、View 不判断"的落点：
+        /// 火炮免反击 / 轰炸机免反击 / 打 HQ（HQ 攻 0）这些例外的 M 都是 0，
+        /// 调用方不需要写任何 if。`remaining` = 结算后血量。</summary>
+        public void ShowPreview(int slot, Vector2 localPos, int damage, int remaining)
+        {
+            EnsurePreviewNodes();
+            RectTransform root = slot == 0 ? _previewAtk : _previewTgt;
+            TextMeshProUGUI value = slot == 0 ? _previewAtkValue : _previewTgtValue;
+            TextMeshProUGUI sub = slot == 0 ? _previewAtkSub : _previewTgtSub;
+            if (root == null || value == null || sub == null) return;
+
+            if (damage <= 0)
+            {
+                root.gameObject.SetActive(false);
+                return;
+            }
+
+            root.gameObject.SetActive(true);
+            root.anchoredPosition = localPos;
+            value.text = "-" + damage;
+            sub.text = "剩 " + Mathf.Max(0, remaining);
+        }
+
+        /// <summary>清掉两侧的预览浮窗。</summary>
+        public void ClearPreviews()
+        {
+            if (_previewAtk != null) _previewAtk.gameObject.SetActive(false);
+            if (_previewTgt != null) _previewTgt.gameObject.SetActive(false);
+        }
+
+        /// <summary>箭头节点组（惰性创建一次，之后只改位置 / 颜色 / 尺寸）。</summary>
+        private void EnsureArrowNodes()
+        {
+            if (_arrowShaft != null && _arrowTip != null) return;
+
+            // 线身用 radius = 0（纯白贴图）：AddImage 按**创建时**的尺寸生成贴图，
+            // 而线身长度每帧都在变 —— 带圆角的贴图会被纵向拉伸变形，纯色则完全免疫。
+            _arrowShaft = UiKit.Anchored("ArrowShaft", transform,
+                                         new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                         Vector2.zero, new Vector2(ArrowShaftWidth, 120f));
+            _arrowShaftImg = UiKit.AddImage(_arrowShaft, ArrowColor, 0);
+
+            _arrowTip = UiKit.Anchored("ArrowTip", transform,
+                                       new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                       Vector2.zero, new Vector2(ArrowTipWidth, ArrowTipHeight));
+            _arrowTipImg = UiKit.AddSprite(_arrowTip, UiKit.Triangle(26, 32), ArrowTipColor);
+
+            HideArrow();
+        }
+
+        /// <summary>预览浮窗节点组（两侧各一组：主行 = 伤害数字、副行 = 结算后血量）。</summary>
+        private void EnsurePreviewNodes()
+        {
+            if (_previewAtk != null && _previewTgt != null) return;
+
+            BuildPreview(ref _previewAtk, "PreviewAtk", ref _previewAtkValue, ref _previewAtkSub);
+            BuildPreview(ref _previewTgt, "PreviewTgt", ref _previewTgtValue, ref _previewTgtSub);
+            ClearPreviews();
+        }
+
+        private void BuildPreview(ref RectTransform root, string name,
+                                  ref TextMeshProUGUI value, ref TextMeshProUGUI sub)
+        {
+            root = UiKit.Anchored(name, transform,
+                                  new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                  Vector2.zero, new Vector2(170f, 104f));
+
+            // 主行：与伤害飘字**完全同规格**（描边 + 亮红 + 46px）——它就是"飘字的静态版"
+            Color shadowColor = new Color32(8, 10, 14, 235);
+            RectTransform vShadowRt = UiKit.Anchored("VShadow", root,
+                                                     new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                     new Vector2(3f, 19f), new Vector2(170f, 60f));
+            UiKit.AddLabel(vShadowRt, "-0", FloatFontSize, shadowColor,
+                           TextAlignmentOptions.Center, FontStyles.Bold);
+            RectTransform vRt = UiKit.Anchored("V", root,
+                                               new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                               new Vector2(0f, 22f), new Vector2(170f, 60f));
+            value = UiKit.AddLabel(vRt, "-0", FloatFontSize, UiKit.TargetColor,
+                                   TextAlignmentOptions.Center, FontStyles.Bold);
+
+            // 副行："剩 X"（小一号，同色系描边）
+            RectTransform sShadowRt = UiKit.Anchored("SShadow", root,
+                                                     new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                                     new Vector2(2f, -37f), new Vector2(170f, 36f));
+            UiKit.AddLabel(sShadowRt, "剩 0", PreviewSubFontSize, shadowColor,
+                           TextAlignmentOptions.Center, FontStyles.Bold);
+            RectTransform sRt = UiKit.Anchored("S", root,
+                                               new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                               new Vector2(0f, -35f), new Vector2(170f, 36f));
+            sub = UiKit.AddLabel(sRt, "剩 0", PreviewSubFontSize, UiKit.TextMain,
+                                 TextAlignmentOptions.Center, FontStyles.Bold);
+        }
+
         /// <summary>停掉所有动画并销毁残留的特效对象（重开一局时调用）。</summary>
         public void ClearAll()
         {
@@ -176,6 +358,12 @@ namespace KardsLike.View
             // 界面会**永久歪在**最后一帧的偏移上。重开一局时必须把它按回基准。
             _screenShakeRoutine = null;
             if (ShakeTarget != null) ShakeTarget.anchoredPosition = _screenShakeBase;
+
+            // [阶段2.6 · 任务2] 箭头与预览同样挂在 EffectsLayer 上（不受 ClearSpawned 影响），
+            // 这里显式收掉——否则"重开一局"会残留一根箭头。
+            // （下面的循环会把它们的节点一并销毁；字段留下伪 null，下次惰性重建。）
+            HideArrow();
+            ClearPreviews();
 
             for (int i = transform.childCount - 1; i >= 0; i--)
             {
