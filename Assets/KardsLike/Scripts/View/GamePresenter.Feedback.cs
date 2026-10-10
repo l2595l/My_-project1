@@ -157,8 +157,8 @@ namespace KardsLike.View
             // 单位移动 / 攻击追踪（任务 C 步骤③④）
             _linePrev.Clear();
             _lineCur.Clear();
-            _operatedPrev.Clear();
-            _operatedCur.Clear();
+            _attackedPrev.Clear();
+            _attackedCur.Clear();
             _movedIds.Clear();
             _attackedIds.Clear();
             _actionBaselineReady = false;
@@ -291,11 +291,13 @@ namespace KardsLike.View
         // 所以"上一帧在支援线、这一帧在前线"就等价于"刚刚移上前线"。
         // ==================================================================
 
-        /// <summary>上一帧每个单位所在的战线（0 = 支援线，1 = 前线）与"本回合是否已行动"。</summary>
+        /// <summary>上一帧每个单位所在的战线（0 = 支援线，1 = 前线）与"本回合是否已攻击"。
+        /// [阶段2.6 · 任务3] 快照从"已行动（单标志）"升级为"已攻击"——攻击判据不再需要
+        /// "减去移动"来推导（见 CollectUnitActionEvents），坦克"移+攻"两步各自触发。</summary>
         private Dictionary<int, int> _linePrev = new Dictionary<int, int>();
         private Dictionary<int, int> _lineCur = new Dictionary<int, int>();
-        private Dictionary<int, bool> _operatedPrev = new Dictionary<int, bool>();
-        private Dictionary<int, bool> _operatedCur = new Dictionary<int, bool>();
+        private Dictionary<int, bool> _attackedPrev = new Dictionary<int, bool>();
+        private Dictionary<int, bool> _attackedCur = new Dictionary<int, bool>();
         private readonly List<int> _movedIds = new List<int>();
         private readonly List<int> _attackedIds = new List<int>();
         private bool _actionBaselineReady;
@@ -354,24 +356,25 @@ namespace KardsLike.View
         }
 
         /// <summary>
-        /// 把场上每个单位（含 HQ）的"所在战线 + 本回合是否已行动"一次写进两份快照。
+        /// 把场上每个单位（含 HQ）的"所在战线 + 本回合是否已攻击"一次写进两份快照。
+        /// [阶段2.6 · 任务3] 第二份快照从"已行动"升级为"已攻击"（判据见 CollectUnitActionEvents）。
         ///
         /// 两者一次采完，是为了让下面的事件判定**不依赖调用顺序** ——
-        /// "刚行动过、但没换战线"这条判据要同时用到两个快照，
+        /// "刚攻击过、但没换战线"这条判据要同时用到两个快照，
         /// 如果分成两个方法各自交换快照，前一个跑完就把"上一帧"覆盖掉了。
         /// </summary>
         private static void SnapshotUnitActions(GameState s,
                                                Dictionary<int, int> lines,
-                                               Dictionary<int, bool> operated)
+                                               Dictionary<int, bool> attacked)
         {
             lines.Clear();
-            operated.Clear();
+            attacked.Clear();
 
             List<UnitInstance> front = s.Frontline;
             for (int i = 0; i < front.Count; i++)
             {
                 lines[front[i].InstanceId] = (int)front[i].Line;
-                operated[front[i].InstanceId] = front[i].HasOperatedThisTurn;
+                attacked[front[i].InstanceId] = front[i].HasAttackedThisTurn;
             }
 
             for (int p = 0; p < s.Players.Length; p++)
@@ -380,7 +383,7 @@ namespace KardsLike.View
                 for (int i = 0; i < sup.Count; i++)
                 {
                     lines[sup[i].InstanceId] = (int)sup[i].Line;
-                    operated[sup[i].InstanceId] = sup[i].HasOperatedThisTurn;
+                    attacked[sup[i].InstanceId] = sup[i].HasAttackedThisTurn;
                 }
             }
         }
@@ -389,14 +392,15 @@ namespace KardsLike.View
         /// [任务C-③④] 比较前后两帧，得出这一帧"移上前线"与"发动攻击"的单位。
         ///
         /// 移动的判据：`Line` 从支援线变成前线（引擎里只有这一个方向，值变大即移动）。
-        /// 攻击的判据：**本回合"已行动"标志从 false 变 true，且它不是移动** ——
-        ///   引擎里只有两个地方会置这个标志：`MoveUnit` 与 `AttackWithUnit`
-        ///   （"移动与攻击共用每回合一次机会"），所以"刚动过"减去"动了位置"剩下的就是攻击。
+        /// 攻击的判据：[阶段2.6 · 任务3] 起 = **`HasAttackedThisTurn` 从 false 变 true**
+        ///   （唯一置位点是引擎的 `SpendAttack`）。旧版靠"已行动单标志 false→true 且不是移动"
+        ///   推导 —— 拆字段后改为直接快照"已攻击"，更精确（坦克"移+攻"两步各自独立触发，
+        ///   不会再互相遮蔽；顺带修掉登记过的"额外攻击漏播"隐患里最容易踩的一半）。
         ///   这样连"谁攻击了"都不用问引擎要，更不用去解析日志。
         /// </summary>
         private void CollectUnitActionEvents()
         {
-            SnapshotUnitActions(_engine.State, _lineCur, _operatedCur);
+            SnapshotUnitActions(_engine.State, _lineCur, _attackedCur);
 
             _movedIds.Clear();
             _attackedIds.Clear();
@@ -414,13 +418,12 @@ namespace KardsLike.View
                     if (kv.Value > before) _movedIds.Add(kv.Key);
                 }
 
-                foreach (KeyValuePair<int, bool> kv in _operatedCur)
+                foreach (KeyValuePair<int, bool> kv in _attackedCur)
                 {
-                    if (!kv.Value) continue;                                    // 这一帧它还没行动
+                    if (!kv.Value) continue;                                    // 这一帧它还没攻击
                     bool before;
-                    if (!_operatedPrev.TryGetValue(kv.Key, out before)) continue;   // 这一帧新上场的
-                    if (before) continue;                                       // 之前就动过了
-                    if (_movedIds.Contains(kv.Key)) continue;                   // 换了战线 ⇒ 是移动
+                    if (!_attackedPrev.TryGetValue(kv.Key, out before)) continue;   // 这一帧新上场的
+                    if (before) continue;                                       // 之前就攻击过了
                     _attackedIds.Add(kv.Key);
                 }
             }
@@ -429,9 +432,9 @@ namespace KardsLike.View
             _linePrev = _lineCur;
             _lineCur = ls;
 
-            Dictionary<int, bool> os = _operatedPrev;
-            _operatedPrev = _operatedCur;
-            _operatedCur = os;
+            Dictionary<int, bool> os = _attackedPrev;
+            _attackedPrev = _attackedCur;
+            _attackedCur = os;
         }
 
         /// <summary>

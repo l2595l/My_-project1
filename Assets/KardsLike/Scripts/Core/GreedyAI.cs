@@ -75,6 +75,12 @@ namespace KardsLike.Core
                 foreach (string step in MovePhase()) yield return step;
                 if (_engine.State.IsOver) yield break;
 
+                // [阶段2.6 · 任务3] 坦克冲锋收尾：本回合新移上前线的坦克若还能攻击 → 打 HQ。
+                // 全局顺序是"先攻击、后移动"，所以坦克移上前线后已经没有后续攻击阶段 ——
+                // 而"移 + 立刻打脸"正是坦克"移动+攻击"的组合价值（旧规则下本段永不触发）。
+                foreach (string step in TankChargePhase()) yield return step;
+                if (_engine.State.IsOver) yield break;
+
                 _engine.EndTurn();
                 yield return "结束回合";
             }
@@ -134,7 +140,8 @@ namespace KardsLike.Core
         /// 结果是"场面越来越大、却一个单位也推不动"—— 双方在中线上互相站桩、HQ 谁也打不掉，
         /// 对局被硬拖到疲劳。这是必须提前堵死的。
         ///
-        /// 口径：场上**本回合还没动过**的单位，每个留 1 点（最低档行动费）。
+        /// 口径：场上**本回合还没动过**的单位，每个留 1 点（最低档行动费）；
+        /// [阶段2.6 · 任务3] 坦克若两个动作都没做，按 **2 笔**预留（它真的会花两次）。
         /// 用最低档而不是逐单位按各自费用算，是因为贪心 AI 每回合实际会动几个单位并不确定；
         /// 留一个保守下界即可，真花超了 CanUnitMove / CanUnitAttack 会自然拒绝。
         /// </summary>
@@ -145,8 +152,13 @@ namespace KardsLike.Core
             for (int i = 0; i < _myUnits.Count; i++)
             {
                 UnitInstance u = _myUnits[i];
-                if (u.DeployedThisTurn || u.HasOperatedThisTurn) continue;
-                pending++;
+                // [阶段2.6 · 任务3] "还能行动"改问引擎（坦克=移+攻两个动作，其余兵种=二选一）。
+                if (u.DeployedThisTurn || GameEngine.HasNoActionLeft(u)) continue;
+                // 坦克任何动作都没做过 ⇒ 它真会花两笔（移动 + 攻击）；已做过一个动作的坦克
+                // 还剩 1 笔，与其余兵种一致。
+                int left = 1;
+                if (u.Def.UnitKind == UnitType.Tank && !u.HasMovedThisTurn && !u.HasAttackedThisTurn) left = 2;
+                pending += left;
             }
             return pending;
         }
@@ -270,6 +282,42 @@ namespace KardsLike.Core
             string name = best.Def.Name;
             if (!_engine.MoveUnit(best.InstanceId)) yield break;
             yield return "移动：" + name + " 上前线";
+        }
+
+        // ==================================================================
+        // 阶段二·补：坦克冲锋收尾（[阶段2.6 · 任务3]）
+        // ==================================================================
+
+        /// <summary>
+        /// [阶段2.6 · 任务3] 坦克冲锋收尾：本回合**新移上前线**的坦克若还能攻击，直接打 HQ。
+        ///
+        /// 为什么需要这一段：全局顺序是"先攻击、后移动"（见 StepTurn 注释），
+        /// 坦克移上前线后已经没有后续攻击阶段 —— 而"移 + 立刻打脸"正是坦克
+        /// "移动+攻击"的核心组合价值。没有它，新机制在 200 局里只上线一半。
+        ///
+        /// 触发条件极窄：必须是**坦克**、本回合**移动过**（必然已在前线——移动只有
+        /// 支援→前线一个方向）、且**还没攻击过**。每回合最多触发一次（MovePhase 只移 1 个单位）。
+        /// ⚠️ 旧规则下本段永不触发（坦克移后不能攻击）⇒ 反向对照轮天然安全。
+        /// 目标口径与阶段 B 一致：前线单位默认打脸，避免中线上无限对耗。
+        /// </summary>
+        private IEnumerable<string> TankChargePhase()
+        {
+            if (_engine.State.IsOver) yield break;
+
+            PlayerState ai = _engine.State.Current;
+            _engine.CollectUnitsOf(ai.Index, _myUnits);
+            for (int i = 0; i < _myUnits.Count; i++)
+            {
+                UnitInstance u = _myUnits[i];
+                if (u.Def.UnitKind != UnitType.Tank) continue;
+                if (!u.HasMovedThisTurn || u.HasAttackedThisTurn) continue;   // 必须是"移过、还没攻"
+
+                string why;
+                if (!_engine.CanUnitAttack(u, out why)) continue;   // 资源不足等
+                if (!_engine.CanAttackHq(u, out why)) continue;     // 与阶段 B 同一口径
+                if (!_engine.AttackWithUnit(u.InstanceId, -1)) continue;
+                yield return "冲锋：" + u.Def.Name + " 移上前线后打击 HQ";
+            }
         }
 
         // ==================================================================

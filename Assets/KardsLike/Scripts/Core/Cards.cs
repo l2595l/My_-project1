@@ -43,7 +43,8 @@
         None = 0,
         /// <summary>步兵：基准兵种，双向结算。射程上只能打相邻战线（任务 D 才实现）。</summary>
         Infantry = 1,
-        /// <summary>坦克：双向结算。Kards 口径下同一回合可移动 + 攻击（本作当前仍是"移动与攻击二选一"）。</summary>
+        /// <summary>坦克：双向结算。**同一回合可移动 + 攻击（顺序不限，各付一次行动费）** ——
+        /// [阶段2.6 · 任务3] 已落地（设计文档 §14.5；旧注"本作当前仍是二选一"已作废）。</summary>
         Tank = 2,
         /// <summary>火炮：**造成**反击伤害，但**不受**反击伤害（阶段 2.5 任务 A 实现）。</summary>
         Artillery = 3,
@@ -243,13 +244,20 @@
         public bool DeployedThisTurn;
 
         /// <summary>
-        /// [STAGE2B] 本回合是否已经行动过。**移动与攻击共用这一次机会** ——
-        /// 这就是 Kards 的「每单位每回合一次操作」。
+        /// [阶段2.6 · 任务3] 本回合是否已移动 / 是否已攻击。两个字段一起取代了原来的
+        /// `HasOperatedThisTurn`（单布尔"移动与攻击共用一次机会"）。
         ///
-        /// 与 DeployedThisTurn 分成两个字段，唯一目的是给出不同的失败原因
-        /// （"刚部署" vs "已经动过"）；判定时两者任一为 true 都不能行动。
+        /// 行动经济（Kards 口径，设计文档 §14.5）：
+        ///   · **坦克**：每回合可移动一次**且**攻击一次（顺序不限）⇒ 两个字段各自独立；
+        ///   · **其余兵种**：移动与攻击二选一 ⇒ 任一为 true 即不能再行动。
+        /// 判定唯一出口是 `GameEngine.HasNoActionLeft` / `CanUnitMove` / `CanUnitAttack`，
+        /// View 与 AI **不许**自己写这份兵种 if（否则立刻出现两个真相来源）。
+        /// 与 DeployedThisTurn 分成不同字段，唯一目的是给出不同的失败原因（"刚部署" vs "已经动过"）。
         /// </summary>
-        public bool HasOperatedThisTurn;
+        public bool HasMovedThisTurn;
+
+        /// <summary>[阶段2.6 · 任务3] 见 `HasMovedThisTurn` 的合并说明。</summary>
+        public bool HasAttackedThisTurn;
 
         public UnitInstance(int instanceId, CardDef def, int ownerIndex)
         {
@@ -261,7 +269,8 @@
             MaxHealth = def.Health;
             Line = Line.Support;
             DeployedThisTurn = false;
-            HasOperatedThisTurn = false;
+            HasMovedThisTurn = false;
+            HasAttackedThisTurn = false;
         }
 
         public bool IsAlive { get { return Health > 0; } }

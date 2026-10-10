@@ -36,7 +36,7 @@ namespace KardsLike.EditorTools
             RunAll();
         }
 
-        /// <summary>跑完 10 项自检，返回是否全部通过。</summary>
+        /// <summary>跑完 11 项自检，返回是否全部通过。</summary>
         public static bool RunAll()
         {
             StringBuilder sb = new StringBuilder();
@@ -50,7 +50,7 @@ namespace KardsLike.EditorTools
             sb.AppendLine("- 对局模式：MatchMode.AiVsAi（自检没有 UI，需要自由驱动双方）");
             sb.AppendLine("- 覆盖：面板预算与兵种/行动费 / 资源上限 / 同种子可复现 / 终止性与先手偏差 / " +
                           "部署失调与每回合一次行动 / L1 判负 / 三条战线与行动费 / HQ 单位与疲劳结算 / " +
-                          "兵种反击例外 / 越线射程与战斗机拦截");
+                          "兵种反击例外 / 越线射程与战斗机拦截 / 坦克移动+攻击");
             sb.AppendLine();
             sb.AppendLine("| # | 检查项 | 结果 |");
             sb.AppendLine("|---|---|---|");
@@ -87,6 +87,9 @@ namespace KardsLike.EditorTools
 
             bodies.Add(RunLongRangeAndInterception(out var ok10, out string title10));
             titles.Add(title10); results.Add(ok10);
+
+            bodies.Add(RunTankMoveAndAttack(out var ok11, out string title11));
+            titles.Add(title11); results.Add(ok11);
 
             for (int i = 0; i < results.Count; i++)
             {
@@ -396,17 +399,18 @@ namespace KardsLike.EditorTools
         private static string RunDeploySicknessAndLethal(out bool okSummon, out bool okLethal,
                                                         out string titleSummon, out string titleLethal)
         {
-            titleSummon = "部署失调 + 每回合一次行动：部署当回合不能移动/攻击，下一回合可移动且只扣对应资源";
+            titleSummon = "部署失调 + 每回合一次行动（非坦克）：部署当回合不能移动/攻击，下一回合可移动且只扣对应资源";
             titleLethal = "L1 判负：HQ 归零后 Result 正确，且此后所有操作返回 false";
             okSummon = false;
             okLethal = false;
 
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("## 第 5 项 · 部署失调与「每单位每回合一次行动」（设计文档 §7.1）");
+            sb.AppendLine("## 第 5 项 · 部署失调与「每单位每回合一次行动」（非坦克口径；坦克例外见第 11 项）（设计文档 §7.1）");
             sb.AppendLine();
             sb.AppendLine("Kards 官方口径：\"Without Blitz, you need to wait one turn after the deployment");
             sb.AppendLine("until you **use** the unit.\" —— 是 use 不是 attack，所以部署当回合**既不能移动也不能攻击**；");
             sb.AppendLine("要走到敌方 HQ 需要三个己方回合（部署 → 移动上前线 → 攻击）。");
+            sb.AppendLine("（坦克例外——同回合可移动 + 攻击——见第 11 项。）");
             sb.AppendLine();
 
             // 需要一个"开局手上就有打得起的单位卡"的种子。
@@ -421,7 +425,11 @@ namespace KardsLike.EditorTools
                 string reason;
                 for (int i = 0; i < probe.State.Players[0].Hand.Count; i++)
                 {
-                    if (probe.State.Players[0].Hand[i].IsUnit && probe.CanPlayCard(i, out reason))
+                    // [阶段2.6 · 任务3] 加"非坦克"限定：本项的"二选一"口径只适用于非坦克
+                    //（坦克"移动+攻击"例外由第 11 项覆盖）——否则抽到坦克种子会让断言语义漂移。
+                    if (probe.State.Players[0].Hand[i].IsUnit
+                        && probe.State.Players[0].Hand[i].UnitKind != UnitType.Tank
+                        && probe.CanPlayCard(i, out reason))
                     {
                         seed = s; eng = probe; handIndex = i;
                         break;
@@ -503,7 +511,7 @@ namespace KardsLike.EditorTools
 
             sb.AppendLine("**结论：" + (okSummon
                 ? "部署当回合既不能移动也不能攻击（部署失调成立）；下一回合可移动、扣除的资源与行动费一致，" +
-                  "且移动后本回合不能再攻击（「每单位每回合一次行动」成立）。"
+                  "且移动后本回合不能再攻击（「非坦克每单位每回合一次行动」成立）。"
                 : "部署失调或「每回合一次行动」行为不符预期。") + "**");
             sb.AppendLine();
 
@@ -787,7 +795,8 @@ namespace KardsLike.EditorTools
             st.Players[0].SupportLine.Remove(mine);
             st.Frontline.Add(mine);
             st.Players[0].Resources = 99;
-            mine.HasOperatedThisTurn = false;
+            mine.HasMovedThisTurn = false;
+            mine.HasAttackedThisTurn = false;
             bool frontCanHitHq = eng.CanAttackHq(mine, out r3);
 
             int foeHpBefore = st.Players[1].HqHealth;
@@ -1216,7 +1225,7 @@ namespace KardsLike.EditorTools
             string lastLog = engG.State.Log.Count > logBefore
                 ? engG.State.Log[engG.State.Log.Count - 1] : "";
             bool c17 = !attackedG && lastLog.Contains("拦截")
-                       && !bmbG.HasOperatedThisTurn                    // 行动没有被消耗
+                       && !GameEngine.HasNoActionLeft(bmbG)            // 行动没有被消耗
                        && engG.State.Players[1].HqHealth == 20;        // HQ 一点血都没掉
 
             // ---- 表格 ----
@@ -1294,6 +1303,140 @@ namespace KardsLike.EditorTools
         }
 
         // ==================================================================
+        // 第 11 项 · 坦克「移动 + 攻击」（[阶段2.6 · 任务3] 新增）
+        // ==================================================================
+
+        private static string RunTankMoveAndAttack(out bool ok, out string title)
+        {
+            title = "坦克「移动 + 攻击」：坦克同回合可移动且攻击（各扣一次行动费、顺序不限）；非坦克仍二选一；部署失调不豁免";
+            ok = false;
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("## 第 11 项 · 坦克「移动 + 攻击」（设计文档 §14.5）");
+            sb.AppendLine();
+            sb.AppendLine("Kards 口径（三来源一致）：坦克可在同一回合**移动并攻击（顺序不限）**、两次行动**各付一次**行动费、");
+            sb.AppendLine("**不豁免部署失调**。全部断言手工摆盘 + 期望值硬编码（不拿被测代码算期望值）。");
+            sb.AppendLine();
+
+            CardDef armored = CardDb.Get("unit_armored");   // 坦克 4/5，行动费 2
+            CardDef scout = CardDb.Get("unit_scout");       // 步兵 1/2，行动费 1
+
+            // ---- 11.1 坦克：先移动、后攻击（各扣一次费）----
+            GameEngine eng = NewCounterFixture(800);
+            UnitInstance tankA = PlaceUnit(eng, armored, 0, Line.Support);
+            PlaceUnit(eng, scout, 1, Line.Support);   // 场景元素：敌方后排有人（不挡前线）
+
+            int cost = GameEngine.ActionCostOf(armored);
+            int res0 = eng.State.Players[0].Resources;
+            bool moveOk = eng.MoveUnit(tankA.InstanceId);
+            int res1 = eng.State.Players[0].Resources;
+            string whyA = "";
+            bool canAttackAfterMove = eng.CanUnitAttack(tankA, out whyA);   // 关键：旧规则此处 false
+            bool atkOk = eng.AttackWithUnit(tankA.InstanceId, -1);          // 移上前线 → 打 HQ
+            int res2 = eng.State.Players[0].Resources;
+            string whyM = "";
+            bool moveAgainBlocked = !eng.CanUnitMove(tankA, out whyM);
+            string whyAt = "";
+            bool atkAgainBlocked = !eng.CanUnitAttack(tankA, out whyAt);
+
+            bool e1 = moveOk && (res0 - res1 == cost);
+            bool e2 = canAttackAfterMove && atkOk && (res1 - res2 == cost);
+            bool e3 = moveAgainBlocked && atkAgainBlocked;
+
+            sb.AppendLine("### 11.1 坦克：先移动、后攻击");
+            sb.AppendLine();
+            sb.AppendLine("- 移动成功：" + moveOk + "；资源 " + res0 + " → " + res1 + "（期望扣 " + cost + "）");
+            sb.AppendLine("- **移动后 CanUnitAttack：" + canAttackAfterMove +
+                          (whyA.Length > 0 ? "（" + whyA + "）" : "") + "** —— 旧规则此处为 false（本项最关键的对偶翻转）");
+            sb.AppendLine("- 攻击成功：" + atkOk + "；资源 " + res1 + " → " + res2 + "（再扣 " + cost + "，总差 " + (res0 - res2) + "）");
+            sb.AppendLine("- 再移动被拒：" + moveAgainBlocked + (whyM.Length > 0 ? "（" + whyM + "）" : ""));
+            sb.AppendLine("- 再攻击被拒：" + atkAgainBlocked + (whyAt.Length > 0 ? "（" + whyAt + "）" : ""));
+            sb.AppendLine();
+
+            // ---- 11.2 顺序不限的另一半：先攻击、后移动（且证明"范围按当下位置算"）----
+            // 敌方前线只有一个 2 血侦察兵 ⇒ 坦克 4 攻可击杀 → 清空后前线归"无主" ⇒ 可以移入
+            //（这正好演示"先攻清路 → 再移占线"的组合；若先移则会被"敌占前线"拒绝）
+            GameEngine engB = NewCounterFixture(801);
+            UnitInstance tankB = PlaceUnit(engB, armored, 0, Line.Support);
+            UnitInstance foeFrontB = PlaceUnit(engB, scout, 1, Line.Front);
+
+            string whyB1 = "";
+            bool hqBeforeMove = engB.CanAttackHq(tankB, out whyB1);    // 支援线：够不到 HQ
+            bool atkB = engB.AttackWithUnit(tankB.InstanceId, foeFrontB.InstanceId);   // 先攻：打敌前线（击杀）
+            bool moveB = engB.MoveUnit(tankB.InstanceId);               // 后移：前线已空，可移入
+            string whyB2 = "";
+            bool hqAfterMove = engB.CanAttackHq(tankB, out whyB2);      // 移动后：够得到 HQ
+
+            bool e4 = !hqBeforeMove && atkB && moveB && hqAfterMove;
+
+            sb.AppendLine("### 11.2 坦克：先攻击、后移动（顺序不限的另一半 + 范围按当下位置算）");
+            sb.AppendLine();
+            sb.AppendLine("- 支援线时 CanAttackHq：" + hqBeforeMove + "（期望 false" + (whyB1.Length > 0 ? "：" + whyB1 : "") + "）");
+            sb.AppendLine("- 先攻击（击杀敌方前线侦察兵 → 清路）成功：" + atkB + " → 再移动（占线）成功：" + moveB);
+            sb.AppendLine("- 移动后 CanAttackHq：" + hqAfterMove + "（期望 true —— 攻击范围按**当下位置**算）");
+            sb.AppendLine();
+
+            // ---- 11.3 对偶：非坦克仍二选一 ----
+            GameEngine engC = NewCounterFixture(802);
+            UnitInstance infC = PlaceUnit(engC, scout, 0, Line.Support);
+            bool moveC = engC.MoveUnit(infC.InstanceId);
+            string whyC = "";
+            bool infAtkAfterMove = engC.CanUnitAttack(infC, out whyC);
+            bool e5 = moveC && !infAtkAfterMove;
+
+            sb.AppendLine("### 11.3 对偶：非坦克（步兵）仍「移动与攻击二选一」");
+            sb.AppendLine();
+            sb.AppendLine("- 步兵移动成功：" + moveC + " → 移动后 CanUnitAttack：" + infAtkAfterMove +
+                          "（期望 false" + (whyC.Length > 0 ? "：" + whyC + "）" : "）"));
+            sb.AppendLine();
+
+            // ---- 11.4 部署失调不豁免（坦克也一样）----
+            GameEngine engD = NewCounterFixture(803);
+            UnitInstance tankD = PlaceUnit(engD, armored, 0, Line.Support);
+            tankD.DeployedThisTurn = true;    // 模拟"刚部署"
+            string whyD1 = "";
+            bool dMoveRejected = !engD.CanUnitMove(tankD, out whyD1);
+            string whyD2 = "";
+            bool dAtkRejected = !engD.CanUnitAttack(tankD, out whyD2);
+            bool e6 = dMoveRejected && dAtkRejected;
+
+            sb.AppendLine("### 11.4 部署失调不豁免（坦克部署当回合仍不能行动）");
+            sb.AppendLine();
+            sb.AppendLine("- 部署当回合移动被拒：" + dMoveRejected + " / 攻击被拒：" + dAtkRejected +
+                          "（期望均 true" + (whyD1.Length > 0 ? "：" + whyD1 : "") + "）");
+            sb.AppendLine();
+
+            // ---- 11.5 资源不足：第二个动作被拒、且不扣钱 ----
+            GameEngine engE = NewCounterFixture(804);
+            UnitInstance tankE = PlaceUnit(engE, armored, 0, Line.Support);
+            PlaceUnit(engE, scout, 1, Line.Support);
+            engE.MoveUnit(tankE.InstanceId);
+            engE.State.Players[0].Resources = cost - 1;
+            int resE0 = engE.State.Players[0].Resources;
+            string whyE = "";
+            bool eAtkRejected = !engE.CanUnitAttack(tankE, out whyE);
+            bool eNoSpend = engE.State.Players[0].Resources == resE0;
+            bool e7 = eAtkRejected && whyE.Contains("资源") && eNoSpend;
+
+            sb.AppendLine("### 11.5 资源不足：坦克第二个动作被拒、不扣钱");
+            sb.AppendLine();
+            sb.AppendLine("- 移动后资源 = " + (cost - 1) + "（行动费 " + cost + "）→ CanUnitAttack 被拒：" + eAtkRejected +
+                          "（" + whyE + "）；资源保持：" + eNoSpend);
+            sb.AppendLine();
+            sb.AppendLine("> ⚠️ 「闪击 × 坦克 = 登场即可移+攻」的断言**留桩**：依赖任务 4（闪击字段）落地后补进本项，");
+            sb.AppendLine("> 不得在任务 4 前含糊成「已测」。");
+            sb.AppendLine();
+
+            ok = e1 && e2 && e3 && e4 && e5 && e6 && e7;
+
+            sb.AppendLine("**结论：" + (ok
+                ? "坦克同回合可移动且攻击（两笔各扣一次、顺序不限、范围按当下位置算）；非坦克仍二选一；部署失调不豁免；资源不足时第二动作被拒且不扣钱。"
+                : "坦克「移动 + 攻击」行为不符预期，详见上文。") + "**");
+            sb.AppendLine();
+            return sb.ToString();
+        }
+
+        // ==================================================================
         // 工具
         // ==================================================================
 
@@ -1313,7 +1456,7 @@ namespace KardsLike.EditorTools
         }
 
         /// <summary>[阶段2.5 · 任务 A] 第 9 项的夹具：把一个单位直接摆到指定战线，
-        /// 并清掉"部署失调 / 本回合已行动"两个标记（否则 CanUnitAct 会拦住攻击，断言全部失败）。
+        /// 并清掉"部署失调 / 本回合的行动记录"（否则 CanUnitAct 会拦住攻击，断言全部失败）。
         /// 注意 UnitInstance 构造时默认 Line = Support，所以前线必须显式加进 Frontline 列表。</summary>
         private static UnitInstance PlaceUnit(GameEngine eng, CardDef def, int owner, Line line)
         {
@@ -1322,7 +1465,8 @@ namespace KardsLike.EditorTools
             if (line == Line.Support) eng.State.Players[owner].SupportLine.Add(u);
             else eng.State.Frontline.Add(u);
             u.DeployedThisTurn = false;
-            u.HasOperatedThisTurn = false;
+            u.HasMovedThisTurn = false;
+            u.HasAttackedThisTurn = false;
             return u;
         }
 

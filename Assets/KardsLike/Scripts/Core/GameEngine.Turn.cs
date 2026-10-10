@@ -66,22 +66,25 @@ namespace KardsLike.Core
         }
 
         /// <summary>
-        /// [STAGE2B] 回合开始：解除这一方全部单位的"部署失调"与"本回合已行动"。
+        /// [STAGE2B] 回合开始：解除这一方全部单位的"部署失调"与"本回合的行动记录"。
         /// 支援阵线与（归他所有的）前线都要清 —— 见 BeginTurn 里的告警注释。
+        /// [阶段2.6 · 任务3] 行动记录从单标志拆成"已移动 / 已攻击"两个，两处都要清。
         /// </summary>
         private void ResetUnitStates(PlayerState p)
         {
             for (int i = 0; i < p.SupportLine.Count; i++)
             {
                 p.SupportLine[i].DeployedThisTurn = false;
-                p.SupportLine[i].HasOperatedThisTurn = false;
+                p.SupportLine[i].HasMovedThisTurn = false;
+                p.SupportLine[i].HasAttackedThisTurn = false;
             }
             if (State.FrontlineOwner == p.Index)
             {
                 for (int i = 0; i < State.Frontline.Count; i++)
                 {
                     State.Frontline[i].DeployedThisTurn = false;
-                    State.Frontline[i].HasOperatedThisTurn = false;
+                    State.Frontline[i].HasMovedThisTurn = false;
+                    State.Frontline[i].HasAttackedThisTurn = false;
                 }
             }
         }

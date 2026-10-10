@@ -175,9 +175,10 @@ namespace KardsLike.View
             else state = new Color(0f, 0f, 0f, 0f);
 
             // 本回合已经行动过的压暗一点，提示"它这回合动不了了"
+            // [阶段2.6 · 任务3] "还有没有行动空间"改问引擎（坦克移+攻各一次；其余兵种二选一）
             Face f = BuildFace(parent, position, BoardCardSize, state,
                                CardArt.WindowColor(kind), CardArt.FrameTint(kind),
-                               false, unit.HasOperatedThisTurn);
+                               false, GameEngine.HasNoActionLeft(unit));
 
             CardView v = f.View;
             v.UnitId = unit.InstanceId;
@@ -202,7 +203,8 @@ namespace KardsLike.View
             if (showStatus)
             {
                 if (unit.DeployedThisTurn) status = "部署失调";
-                else if (unit.HasOperatedThisTurn) status = "已行动";
+                // [阶段2.6 · 任务3] "已行动"= 已无任何行动空间（坦克=移+攻都做完；其余兵种=动过一次）
+                else if (GameEngine.HasNoActionLeft(unit)) status = "已行动";
             }
             if (status.Length > 0)
             {

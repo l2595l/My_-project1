@@ -14,7 +14,7 @@ namespace KardsLike.Core
     /// [阶段2.5 · 提示词 1] 本类已按职责拆成 4 个 partial 文件（**纯结构调整，规则一行未改**）：
     ///   · GameEngine.cs        常量 / 字段 / 构造函数 / 回合归属守卫 / StartMatch / Restart
     ///   · GameEngine.Turn.cs   回合流程（BeginTurn / EndTurn）/ 疲劳 / 抽牌 / 终局
-    ///   · GameEngine.Play.cs   出牌（CanPlayCard / PlayCard）/ 目标校验 / 指令卡结算 / SpendAction
+    ///   · GameEngine.Play.cs   出牌（CanPlayCard / PlayCard）/ 目标校验 / 指令卡结算 / SpendMove + SpendAttack
     ///   · GameEngine.Combat.cs 战斗与线位（CanUnitAct / MoveUnit / AttackWithUnit）/ 伤害与死亡清理 / 查询辅助
     /// </summary>
     public sealed partial class GameEngine
@@ -102,6 +102,26 @@ namespace KardsLike.Core
         {
             if (card == null) return 0;
             return card.ActionCost;
+        }
+
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// [阶段2.6 · 任务3] 这个单位本回合**是否已无任何剩余行动**。全工程唯一出口：
+        ///   · 坦克：移动与攻击**各一次** ⇒ 两件都做完才算没有行动空间；
+        ///   · 其余兵种：移动与攻击**二选一** ⇒ 任一做过即没有行动空间。
+        ///
+        /// 谁在用它：Core 的 `CanUnitAct`（行动前置校验）、View 的"已行动"压暗与状态文字、
+        /// AI 的预算预留（`ReserveForActions`）。**任何地方都不许再写一份兵种 if**
+        /// （"规则只有一个真相来源"——本项目已因两套语义踩过两次）。
+        /// 注意：它**不检查**归属 / 部署失调 / 资源 / 对局状态，那些在 `CanUnitAct` 里。
+        /// </summary>
+        public static bool HasNoActionLeft(UnitInstance u)
+        {
+            if (u == null) return true;
+            if (u.Def.UnitKind == UnitType.Tank)
+                return u.HasMovedThisTurn && u.HasAttackedThisTurn;
+            return u.HasMovedThisTurn || u.HasAttackedThisTurn;
         }
 
         // ------------------------------------------------------------------

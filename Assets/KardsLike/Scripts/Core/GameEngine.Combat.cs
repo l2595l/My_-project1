@@ -17,11 +17,12 @@ namespace KardsLike.Core
         /// <summary>
         /// [STAGE2B] 单位"能不能行动"（移动或攻击都算）的公共前置校验。
         ///
-        /// 把四条约束抽成一个函数，是为了让 MoveUnit 与 AttackWithUnit **不可能**各自漂移出
+        /// 把约束抽成一个函数，是为了让 MoveUnit 与 AttackWithUnit **不可能**各自漂移出
         /// 两套语义 —— 这是阶段 2 决定"移动与攻击付出相同代价"之后最容易写歪的地方：
         ///   · HQ 不能行动（它永远不动，是靶子不是棋子）[STAGE2C]
         ///   · 部署失调（当回合刚部署，不能移动也不能攻击）
-        ///   · 每单位每回合只能行动一次（移动与攻击共用）
+        ///   · 行动经济（[阶段2.6 · 任务3] 起）：**坦克**每回合可移动一次**且**攻击一次
+        ///     （顺序不限）；其余兵种移动与攻击**二选一** —— 判定收口在 `HasNoActionLeft`
         ///   · 资源够不够（行动费按部署费用分 1/2/3 档，与部署共用同一个资源池）[STAGE2C]
         /// 归属与对局状态也在这里一起挡掉。
         /// </summary>
@@ -38,7 +39,7 @@ namespace KardsLike.Core
             if (u.OwnerIndex != State.CurrentPlayer) { reason = "不是你的单位"; return false; }
 
             if (u.DeployedThisTurn) { reason = "本回合刚部署，处于部署失调"; return false; }
-            if (u.HasOperatedThisTurn) { reason = "该单位本回合已经行动过"; return false; }
+            if (HasNoActionLeft(u)) { reason = "该单位本回合已经行动过"; return false; }
 
             // [STAGE2C] 行动费从**资源**里出，与部署共用同一笔预算（见 §2.7）。
             int cost = ActionCostOf(u.Def);
@@ -51,10 +52,16 @@ namespace KardsLike.Core
             return true;
         }
 
-        /// <summary>判断某个单位当前能否发动攻击。</summary>
+        /// <summary>判断某个单位当前能否发动攻击。
+        /// [阶段2.6 · 任务3] 行动经济拆分后追加一层"已攻击"检查：坦克移动后仍能攻击（放行），
+        /// 但攻击过一次就不能再攻击（"每回合攻击两次"是「奋战」的事，属任务 6）。
+        /// 非坦克的"二选一"已由 `CanUnitAct` 的 `HasNoActionLeft` 挡住 ——
+        /// 这里的检查对它们恒不触发、纯防御。</summary>
         public bool CanUnitAttack(UnitInstance u, out string reason)
         {
-            return CanUnitAct(u, out reason);
+            if (!CanUnitAct(u, out reason)) return false;
+            if (u.HasAttackedThisTurn) { reason = "该单位本回合已经攻击过"; return false; }
+            return true;
         }
 
         /// <summary>[STAGE2B] 这个单位此刻有没有**任何一个**合法攻击目标。
@@ -239,10 +246,14 @@ namespace KardsLike.Core
             return true;
         }
 
-        /// <summary>[STAGE2B] 判断某个单位能否移动上前线。</summary>
+        /// <summary>[STAGE2B] 判断某个单位能否移动上前线。
+        /// [阶段2.6 · 任务3] 追加"已移动"检查：坦克攻击后仍能移动（放行），
+        /// 但移动过一次就不能再移动。非坦克由 `CanUnitAct` 的 `HasNoActionLeft` 挡住 ——
+        /// 这里的检查对它们恒不触发、纯防御。</summary>
         public bool CanUnitMove(UnitInstance u, out string reason)
         {
             if (!CanUnitAct(u, out reason)) return false;
+            if (u.HasMovedThisTurn) { reason = "该单位本回合已经移动过"; return false; }
 
             if (u.Line != Line.Support)
             {
@@ -293,7 +304,7 @@ namespace KardsLike.Core
             State.Players[u.OwnerIndex].SupportLine.Remove(u);
             State.Frontline.Add(u);
             u.Line = Line.Front;
-            SpendAction(u);
+            SpendMove(u);
 
             State.AddLog(u.Def.Name + " 移动至前线（资源剩 " +
                          State.Players[u.OwnerIndex].Resources + "）");
@@ -350,7 +361,7 @@ namespace KardsLike.Core
 
             attacker.Health -= damageToAttacker;
             target.Health -= damageToTarget;
-            SpendAction(attacker);
+            SpendAttack(attacker);
 
             State.AddLog(attacker.Def.Name + "(" + damageToTarget + "/" +
                          System.Math.Max(0, attacker.Health) + ") 攻击 " +

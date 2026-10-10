@@ -6,7 +6,7 @@ namespace KardsLike.Core
     /// 对局引擎 · 出牌（设计文档 §6.3 / §6.4）。
     ///
     /// [阶段2.5 · 提示词 1] 从 GameEngine.cs 拆出（**纯结构调整，规则一行未改**）。
-    /// 本文件包含：CanPlayCard / 目标校验 / PlayCard / 指令卡结算 / SpendAction，
+    /// 本文件包含：CanPlayCard / 目标校验 / PlayCard / 指令卡结算 / SpendMove + SpendAttack，
     /// 以及从原「查询辅助」段移入的 GetPlayableHandIndices（它只依赖本文件的 CanPlayCard）。
     /// </summary>
     public sealed partial class GameEngine
@@ -216,13 +216,21 @@ namespace KardsLike.Core
         }
 
         /// <summary>
-        /// [STAGE2B] 记一次行动：标记"本回合已行动" + 扣掉行动费。
-        /// 移动与攻击都必须走这里，这样"同价"就不是靠自觉，而是只有一个出口。
+        /// [STAGE2B] 记一次"移动"：置移动标志 + 扣一次行动费。
         /// [STAGE2C] 扣的是 `Resources`（与部署共用），不再是独立的行动点。
+        /// [阶段2.6 · 任务3] 由原 `SpendAction` 按动作拆成两个出口：坦克两个动作**各付一次**；
+        /// 非坦克二者只会有其一被调用（校验阶段已挡）。
         /// </summary>
-        private void SpendAction(UnitInstance u)
+        private void SpendMove(UnitInstance u)
         {
-            u.HasOperatedThisTurn = true;
+            u.HasMovedThisTurn = true;
+            State.Players[u.OwnerIndex].Resources -= ActionCostOf(u.Def);
+        }
+
+        /// <summary>[阶段2.6 · 任务3] 记一次"攻击"：置攻击标志 + 扣一次行动费。见 `SpendMove`。</summary>
+        private void SpendAttack(UnitInstance u)
+        {
+            u.HasAttackedThisTurn = true;
             State.Players[u.OwnerIndex].Resources -= ActionCostOf(u.Def);
         }
 
