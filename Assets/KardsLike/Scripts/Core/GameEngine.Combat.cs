@@ -240,8 +240,9 @@ namespace KardsLike.Core
             if (target == null) return false;
             if (!CanAttackTarget(attacker, target, out reason)) return false;
 
-            // 与 AttackWithUnit 里那两行**同源的数值**（攻击者攻击力 + CounterDamage 收口）
-            damageToTarget = attacker.Attack;
+            // 与 AttackWithUnit 里那两行**同源的数值**（[任务4] 起主动侧也走同一出口：
+            // UnitAttackDamage（含目标重甲）+ CounterDamage（含冲击与攻击者自身重甲））
+            damageToTarget = UnitAttackDamage(attacker, target);
             damageToAttacker = CounterDamage(attacker, target);
             return true;
         }
@@ -353,15 +354,23 @@ namespace KardsLike.Core
             }
 
             // 先把两边的伤害都算出来，再同时施加伤害 —— 避免"先手方占便宜"。
-            //   · damageToTarget   = **主动攻击伤害**，永远等于攻击者的攻击力（与兵种无关）
-            //   · damageToAttacker = **反击伤害**，[阶段2.5 · 任务 A] 起按兵种分岔
-            //     判定**全部**收口在 CounterDamage() 里，这里不允许再出现第二个 if 去改它。
-            int damageToTarget = attacker.Attack;
+            //   · damageToTarget   = **主动攻击伤害** = 攻击力 − 目标重甲（[任务4] 起收口进
+            //     `UnitAttackDamage`，与 PreviewAttack 同源；不再内联 attacker.Attack）
+            //   · damageToAttacker = **反击伤害**，[阶段2.5 · 任务 A] 起按兵种分岔，
+            //     [任务4] 起追加冲击（→0）与重甲（−X）——判定**全部**收口在 CounterDamage()，
+            //     这里不允许再出现第二个 if 去改它。
+            int damageToTarget = UnitAttackDamage(attacker, target);
             int damageToAttacker = CounterDamage(attacker, target);
 
             attacker.Health -= damageToAttacker;
             target.Health -= damageToTarget;
             SpendAttack(attacker);
+
+            // [任务4] 冲击消耗：**只要发动攻击就消耗**（含攻击 HQ——本作口径，
+            // 官方"攻击总部不移除冲击"的细则不采纳，用户 2026-10-11 拍板）。
+            // ⚠️ 消耗点必须**唯一**在本函数：CounterDamage 是纯函数（PreviewAttack 调它），
+            //    写在那边 = 悬停预览就会烧掉冲击。
+            if (attacker.HasShock) attacker.HasShock = false;
 
             State.AddLog(attacker.Def.Name + "(" + damageToTarget + "/" +
                          System.Math.Max(0, attacker.Health) + ") 攻击 " +
@@ -400,10 +409,22 @@ namespace KardsLike.Core
         ///    三个来源互相印证（中文维基 Kards 条目 / KARDS Fandom 的 Tips / LevelWinner 新手指南；
         ///    Fandom 原话：「it's the only time bombers can take damage in return when attacking」）。
         ///    用户于 2026-10-08 拍板**按该原文实现**。判据见设计文档 §12.2。
+        ///
+        /// ⚠️ [阶段2.6 · 任务4] **本函数扩展为"反击伤害的最终值"**（新增两条，顺序敏感）：
+        ///   · **⓪ 冲击（最前）**：攻击者拥有冲击 ⇒ 反击一律为 0。放最前是因为官方口径是
+        ///     "被攻击单位不会造成**任何**反击伤害"——它必须覆盖全部兵种条款。
+        ///     **纯函数纪律**：这里只读 `HasShock` 不消耗——消耗在 `AttackWithUnit`
+        ///     （PreviewAttack 会调用本函数，若在此消耗 = 悬停预览就会烧掉冲击）。
+        ///   · **⑤ 重甲（收尾）**：攻击者自己的重甲减免它受的这次反击（下限 0）。
+        ///     与"目标侧"的 `UnitAttackDamage` 是一对——"重甲只减单位攻击伤害"的全部落实
+        ///     就在这两个函数，任何第三个减伤点都是 bug。
         /// </summary>
         internal static int CounterDamage(UnitInstance attacker, UnitInstance target)
         {
             if (attacker == null || target == null) return 0;
+
+            // ⓪ [任务4] 冲击：首次攻击抵消敌人的反击。覆盖下面全部兵种条款。
+            if (attacker.HasShock) return 0;
 
             // ① 轰炸机**当防守方**时永远不还手 ——
             //    「(轰炸机)在被攻击时也不会造成反击伤害」，与攻击者是谁无关。
@@ -420,9 +441,32 @@ namespace KardsLike.Core
             // ③ 火炮：不受反击。只挡"攻击者"这一侧 —— 它当防守方时照常还手。
             if (attacker.Def.UnitKind == UnitType.Artillery) return 0;
 
-            // 其余（步兵 / 坦克 / 战斗机）与 HQ：走常规双向结算。
+            // ④ 其余（步兵 / 坦克 / 战斗机）与 HQ：走常规双向结算。
             // HQ 的攻击力是 0，于是"打 HQ 不受反击"由数值保证。
-            return target.Attack;
+            int raw = target.Attack;
+
+            // ⑤ [任务4] 重甲：**攻击者**受到的这次反击 −（攻击者自己的）重甲 X，下限 0。
+            //    官方口径"重甲只减单位攻击造成的伤害"——反击正属于它；指令 / AOE / 疲劳
+            //    走 DamageUnit()，不经过本函数，天然不受影响。
+            int armor = attacker.Def.HeavyArmor;
+            return raw > armor ? raw - armor : 0;
+        }
+
+        /// <summary>
+        /// [阶段2.6 · 任务4] **单位攻击的主动伤害**：攻击力 − 目标重甲（下限 0）。
+        ///
+        /// "重甲只减单位攻击伤害"的两个作用点之一（另一个是 `CounterDamage` 的收尾）。
+        /// 为什么必须是独立出口、而不是在结算处内联一个减法：
+        ///   ① `AttackWithUnit` 与 `PreviewAttack` 必须用**同一份数值**（本项目"两套语义"踩过两次）；
+        ///   ② **GreedyAI 判断"这一下能不能击杀"必须问这里**（`atk.Attack &gt;= tgt.Health` 会高估）。
+        /// ⚠️ 指令卡 / AOE / 疲劳**不走这里**（它们走 DamageUnit）——重甲不减免它们，由路径保证。
+        /// </summary>
+        internal static int UnitAttackDamage(UnitInstance attacker, UnitInstance target)
+        {
+            if (attacker == null || target == null) return 0;
+            int raw = attacker.Attack;
+            int armor = target.Def.HeavyArmor;
+            return raw > armor ? raw - armor : 0;
         }
 
         /// <summary>[STAGE2C] 把"攻击目标参数"解析成单位实例。负数 = 敌方 HQ。</summary>

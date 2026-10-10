@@ -59,6 +59,31 @@
     }
 
     /// <summary>
+    /// [阶段2.6 · 任务4] **关键字（词条）**——"国土阵线"对战词条的位掩码子集。
+    ///
+    /// 口径（官方原文核实见《阶段2.6-任务4-关键字第一批-规则复述与设计问答复核.md》§1）：
+    ///   · **闪击 Blitz**：部署后可以立即行动（跳过部署失调；行动额度仍由行动经济决定——
+    ///     非坦克"移动或攻击"二选一、坦克可"移动 + 攻击"）；
+    ///   · **冲击 Shock**：首次攻击抵消敌人的反击（一次性）；**本作口径：
+    ///     只要发动攻击就消耗（含攻击 HQ）**——官方原文"攻击总部不会移除冲击"不采纳（用户拍板）。
+    ///
+    /// 实现约定：
+    ///   · 位掩码只收"布尔型"词条；**重甲不入本枚举**（它是带等级的数值，见 `CardDef.HeavyArmor`）；
+    ///   · 只加**已实现**的词条位——未实现的（烟幕/守护/伏击/奋战）在各自轮次追加，
+    ///     防止"加了枚举值忘了实现"静默上线（由 CardDb.ValidatePanelBudget 校验合法位）。
+    /// </summary>
+    [System.Flags]
+    public enum Keyword
+    {
+        /// <summary>没有词条（HQ 与指令卡固定用这个值）。</summary>
+        None = 0,
+        /// <summary>闪击：部署后可以立即行动。</summary>
+        Blitz = 1 << 0,
+        /// <summary>冲击：首次攻击抵消敌人的反击（一次性；本作口径——只要攻击就消耗）。</summary>
+        Shock = 1 << 1
+    }
+
+    /// <summary>
     /// [STAGE2B] 单位所在的战线（阶段 2 任务 B：三条战线）。见设计文档 §7.1。
     ///
     /// 三条战线的结构（自上而下）：
@@ -141,6 +166,22 @@
         /// </summary>
         public readonly UnitType UnitKind;
 
+        /// <summary>
+        /// [阶段2.6 · 任务4] **布尔型词条**（位掩码）。见 `Keyword` 枚举。
+        /// 指令卡与 HQ 固定为 <see cref="Keyword.None"/>（由 ValidatePanelBudget 校验）。
+        /// </summary>
+        public readonly Keyword Keywords;
+
+        /// <summary>
+        /// [阶段2.6 · 任务4] **重甲 X**（数值型词条）：该单位受到的"单位攻击"伤害 −X。
+        ///
+        /// 为什么独立成 int 而不是塞进 `Keywords` 位掩码：它带等级（1~3 直接参与减法），
+        /// 位掩码表达等级要靠 3 个位硬编码、又丑又易错。**"是否拥有重甲"的唯一真相 = `&gt; 0`**，
+        /// 不再设冗余的 flags 位。官方上限 3，由 `CardDb.ValidatePanelBudget` 校验。
+        /// 0 = 无重甲（指令卡与 HQ 固定为 0）。
+        /// </summary>
+        public readonly int HeavyArmor;
+
         /// <summary>【仅单位卡】攻击力。指令卡固定为 0。</summary>
         public readonly int Attack;
 
@@ -159,13 +200,15 @@
         /// <summary>
         /// 构造一张卡的静态定义。
         ///
-        /// 参数顺序刻意把两组成对的字段放在一起：
-        ///   `cost / actionCost`（两种花费）与 `type / unitKind`（两种分类）。
+        /// 参数顺序刻意把三组成对的字段放在一起：
+        ///   `cost / actionCost`（两种花费）、`type / unitKind / keywords / heavyArmor`（两种分类 + 词条）
+        ///   与 `attack / health`（面板）。
         /// ⚠️ 参数顺序若写错，由 `CardDb.ValidatePanelBudget()` 兜底 ——
-        ///    行动费与档位不一致会被自检第 1 项直接抓出来，不会静默上线。
+        ///    行动费与档位不一致、词条与重甲越界都会被自检第 1 项直接抓出来，不会静默上线。
         /// </summary>
         public CardDef(string id, string name, int cost, int actionCost,
                        CardType type, UnitType unitKind,
+                       Keyword keywords, int heavyArmor,
                        int attack, int health,
                        EffectId effect, int effectValue, string text)
         {
@@ -175,6 +218,8 @@
             ActionCost = actionCost;
             Type = type;
             UnitKind = unitKind;
+            Keywords = keywords;
+            HeavyArmor = heavyArmor;
             Attack = attack;
             Health = health;
             Effect = effect;
@@ -184,6 +229,9 @@
 
         public bool IsUnit { get { return Type == CardType.Unit; } }
         public bool IsOrder { get { return Type == CardType.Order; } }
+
+        /// <summary>[阶段2.6 · 任务4] 这张卡是否拥有某个布尔词条。</summary>
+        public bool HasKeyword(Keyword k) { return (Keywords & k) != 0; }
         /// <summary>[STAGE2C] 是不是 HQ（大本营）卡。HQ 不进牌库、不参与出牌。</summary>
         public bool IsHq { get { return Type == CardType.Hq; } }
 
@@ -259,6 +307,18 @@
         /// <summary>[阶段2.6 · 任务3] 见 `HasMovedThisTurn` 的合并说明。</summary>
         public bool HasAttackedThisTurn;
 
+        /// <summary>
+        /// [阶段2.6 · 任务4] 冲击"当前是否还没用掉"。构造时从 `Def.Keywords` 初始化；
+        /// **只要发动过一次攻击就置 false**（本作口径：含攻击 HQ——官方"攻击总部不移除"
+        /// 的细则不采纳，用户 2026-10-11 拍板），此后不再恢复
+        /// （官方："Shock doesn't refresh unless the card explicitly says so"）。
+        ///
+        /// ⚠️ 一次性状态必须放实例上、**绝不能写回 Def** —— Def 是不可变的共享卡定义，
+        /// 改它会污染"同一张卡的所有实例 + 下一局游戏"。
+        /// 消耗点唯一：`AttackWithUnit`（`CounterDamage` 保持纯函数，PreviewAttack 只读不消耗）。
+        /// </summary>
+        public bool HasShock;
+
         public UnitInstance(int instanceId, CardDef def, int ownerIndex)
         {
             InstanceId = instanceId;
@@ -271,6 +331,7 @@
             DeployedThisTurn = false;
             HasMovedThisTurn = false;
             HasAttackedThisTurn = false;
+            HasShock = (def.Keywords & Keyword.Shock) != 0;
         }
 
         public bool IsAlive { get { return Health > 0; } }

@@ -36,7 +36,7 @@ namespace KardsLike.EditorTools
             RunAll();
         }
 
-        /// <summary>跑完 11 项自检，返回是否全部通过。</summary>
+        /// <summary>跑完 12 项自检，返回是否全部通过。</summary>
         public static bool RunAll()
         {
             StringBuilder sb = new StringBuilder();
@@ -50,7 +50,7 @@ namespace KardsLike.EditorTools
             sb.AppendLine("- 对局模式：MatchMode.AiVsAi（自检没有 UI，需要自由驱动双方）");
             sb.AppendLine("- 覆盖：面板预算与兵种/行动费 / 资源上限 / 同种子可复现 / 终止性与先手偏差 / " +
                           "部署失调与每回合一次行动 / L1 判负 / 三条战线与行动费 / HQ 单位与疲劳结算 / " +
-                          "兵种反击例外 / 越线射程与战斗机拦截 / 坦克移动+攻击");
+                          "兵种反击例外 / 越线射程与战斗机拦截 / 坦克移动+攻击 / 关键字第一批（闪击/重甲/冲击）");
             sb.AppendLine();
             sb.AppendLine("| # | 检查项 | 结果 |");
             sb.AppendLine("|---|---|---|");
@@ -91,6 +91,9 @@ namespace KardsLike.EditorTools
             bodies.Add(RunTankMoveAndAttack(out var ok11, out string title11));
             titles.Add(title11); results.Add(ok11);
 
+            bodies.Add(RunKeywordsBatch1(out var ok12, out string title12));
+            titles.Add(title12); results.Add(ok12);
+
             for (int i = 0; i < results.Count; i++)
             {
                 if (results[i]) passed++; else failed++;
@@ -123,7 +126,7 @@ namespace KardsLike.EditorTools
 
         private static string RunPanelBudget(out bool ok, out string title)
         {
-            title = "卡牌数据：面板预算 + 兵种已填写 + 行动费与档位一致（ValidatePanelBudget 返回 null）";
+            title = "卡牌数据：面板预算（含词条折让）+ 兵种已填写 + 行动费与档位一致 + 词条合法性（ValidatePanelBudget 返回 null）";
             ok = false;
 
             string violation = CardDb.ValidatePanelBudget();
@@ -132,27 +135,31 @@ namespace KardsLike.EditorTools
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("## 第 1 项 · 卡牌数据（面板预算 / 兵种 / 行动费）");
             sb.AppendLine();
-            sb.AppendLine("[阶段2.5 · 任务 A] 本条由「只查面板预算」扩展为查三条：");
+            sb.AppendLine("[阶段2.5 · 任务 A] 由「只查面板预算」扩展；[任务4] 再扩展词条折让与合法性 —— 当前共五条口径：");
             sb.AppendLine();
             sb.AppendLine("| # | 口径 | 出处 |");
             sb.AppendLine("|---|---|---|");
-            sb.AppendLine("| ① | 单位卡 `攻击 + 生命 = 2 × 费用 + 1` | 设计文档 §4.1 |");
+            sb.AppendLine("| ① | 单位卡 `攻击 + 生命 = 2 × 费用 + 1`；[任务4] 起带词条的卡再 **-1**（面板折让） | 设计文档 §4.1 / §14.4 |");
             sb.AppendLine("| ② | 单位卡的**兵种必须显式填写**（`UnitType.None` 是「忘填」的哨兵值） | 设计文档 §10.1 |");
             sb.AppendLine("| ③ | `ActionCost` 必须等于档位期望（1~2 费→1 / 3~4 费→2 / 5~6 费→3） | 设计文档 §10.3 |");
+            sb.AppendLine("| ④ | [任务4] 词条位只允许**已实现**的（Blitz / Shock）；重甲范围 0~3 | 设计文档 §14.1 |");
+            sb.AppendLine("| ⑤ | [任务4] 指令卡与 HQ：不得有兵种、行动费、词条与重甲 | 同 ValidatePanelBudget |");
             sb.AppendLine();
             sb.AppendLine("第 ② 条存在的理由：兵种漏填会静默地按「普通双向结算」跑，");
             sb.AppendLine("在 200 局数据里表现为「数字说不通但查不出原因」—— 必须在数据层就挡住。");
             sb.AppendLine();
             sb.AppendLine("检查的卡（" + CardDb.Units.Length + " 张单位卡）：");
             sb.AppendLine();
-            sb.AppendLine("| id | 卡名 | 费用 | 攻/命 | 面板 | 预算 | 兵种 | 行动费 | 档位期望 |");
-            sb.AppendLine("|---|---|---|---|---|---|---|---|---|");
+            sb.AppendLine("| id | 卡名 | 费用 | 攻/命 | 面板 | 预算 | 词条 | 重甲 | 兵种 | 行动费 | 档位期望 |");
+            sb.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|");
             for (int i = 0; i < CardDb.Units.Length; i++)
             {
                 CardDef c = CardDb.Units[i];
+                int ded = CardDb.HasAnyKeyword(c) ? 1 : 0;   // [任务4] 词条折让
                 sb.AppendLine("| `" + c.Id + "` | " + c.Name + " | " + c.Cost + " | " +
                               c.Attack + "/" + c.Health + " | " + c.PanelValue + " | " +
-                              CardDef.BudgetForCost(c.Cost) + " | " + c.UnitKind + " | " +
+                              (CardDef.BudgetForCost(c.Cost) - ded) + (ded > 0 ? "（-1）" : "") + " | " +
+                              c.Keywords + " | " + c.HeavyArmor + " | " + c.UnitKind + " | " +
                               c.ActionCost + " | " + CardDb.ExpectedActionCost(c.Cost) + " |");
             }
             sb.AppendLine();
@@ -405,12 +412,12 @@ namespace KardsLike.EditorTools
             okLethal = false;
 
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("## 第 5 项 · 部署失调与「每单位每回合一次行动」（非坦克口径；坦克例外见第 11 项）（设计文档 §7.1）");
+            sb.AppendLine("## 第 5 项 · 部署失调与「每单位每回合一次行动」（非坦克、非闪击口径；坦克例外见第 11 项、闪击见第 12 项）（设计文档 §7.1）");
             sb.AppendLine();
             sb.AppendLine("Kards 官方口径：\"Without Blitz, you need to wait one turn after the deployment");
             sb.AppendLine("until you **use** the unit.\" —— 是 use 不是 attack，所以部署当回合**既不能移动也不能攻击**；");
             sb.AppendLine("要走到敌方 HQ 需要三个己方回合（部署 → 移动上前线 → 攻击）。");
-            sb.AppendLine("（坦克例外——同回合可移动 + 攻击——见第 11 项。）");
+            sb.AppendLine("（例外：坦克同回合可移动 + 攻击——见第 11 项；闪击单位跳过部署失调——见第 12 项。）");
             sb.AppendLine();
 
             // 需要一个"开局手上就有打得起的单位卡"的种子。
@@ -427,8 +434,11 @@ namespace KardsLike.EditorTools
                 {
                     // [阶段2.6 · 任务3] 加"非坦克"限定：本项的"二选一"口径只适用于非坦克
                     //（坦克"移动+攻击"例外由第 11 项覆盖）——否则抽到坦克种子会让断言语义漂移。
+                    // [任务4] 再排除"闪击"：闪击单位部署当回合**可以**行动（第 12 项覆盖），
+                    // 否则抽到闪击种子会直接反转"部署当回合不能行动"的断言。
                     if (probe.State.Players[0].Hand[i].IsUnit
                         && probe.State.Players[0].Hand[i].UnitKind != UnitType.Tank
+                        && !probe.State.Players[0].Hand[i].HasKeyword(Keyword.Blitz)
                         && probe.CanPlayCard(i, out reason))
                     {
                         seed = s; eng = probe; handIndex = i;
@@ -511,7 +521,7 @@ namespace KardsLike.EditorTools
 
             sb.AppendLine("**结论：" + (okSummon
                 ? "部署当回合既不能移动也不能攻击（部署失调成立）；下一回合可移动、扣除的资源与行动费一致，" +
-                  "且移动后本回合不能再攻击（「非坦克每单位每回合一次行动」成立）。"
+                  "且移动后本回合不能再攻击（「非坦克、非闪击单位每回合一次行动」成立）。"
                 : "部署失调或「每回合一次行动」行为不符预期。") + "**");
             sb.AppendLine();
 
@@ -943,21 +953,32 @@ namespace KardsLike.EditorTools
             sb.AppendLine("夹具：清空双方手牌与牌库（本项不推进回合，所以不会触发疲劳）、资源给 99（让行动费闸门不参与）；");
             sb.AppendLine("攻击者放在**我方支援阵线**，目标放在**敌方前线**（支援线单位唯一够得着的敌人）。");
             sb.AppendLine();
-            sb.AppendLine("> [阶段2.5 · 提交 C] 起战斗机 / 轰炸机**已经进卡池**，但本项仍用**局部夹具**");
-            sb.AppendLine("> `_test_fighter`(3费4/3) / `_test_bomber`(4费4/5)，**不**直接取池内实体：");
+            sb.AppendLine("> [阶段2.5 · 提交 C] 起战斗机 / 轰炸机**已经进卡池**，但本项仍用**局部夹具**，");
+            sb.AppendLine("> [任务4] 起**全部样本**也都改为局部夹具：池卡带词条后，词条效果（重甲/冲击）");
+            sb.AppendLine("> 会与兵种规则混进同一份数字 —— 本项只锁定**兵种反击规则**，词条的真实结算断言在第 12 项：");
             sb.AppendLine("> 下表的「期望掉血」是**硬编码**的，用池内实体的话，以后每调一次卡面数值都要回来改期望值。");
             sb.AppendLine("> 夹具不放进 `CardDb.Cards`，所以不会进牌库、不影响任何真实对局。");
             sb.AppendLine();
 
             CardDef fighter = new CardDef("_test_fighter", "战斗机(测试)", 3, 2,
-                                          CardType.Unit, UnitType.Fighter, 4, 3, EffectId.None, 0, "自检夹具，不进卡池");
+                                          CardType.Unit, UnitType.Fighter, Keyword.None, 0, 4, 3, EffectId.None, 0, "自检夹具，不进卡池");
             CardDef bomber = new CardDef("_test_bomber", "轰炸机(测试)", 4, 2,
-                                         CardType.Unit, UnitType.Bomber, 4, 5, EffectId.None, 0, "自检夹具，不进卡池");
+                                         CardType.Unit, UnitType.Bomber, Keyword.None, 0, 4, 5, EffectId.None, 0, "自检夹具，不进卡池");
+            CardDef fInfA = new CardDef("_test_infantry_a", "步兵甲(测试)", 2, 1,
+                                        CardType.Unit, UnitType.Infantry, Keyword.None, 0, 2, 3, EffectId.None, 0, "自检夹具，不进卡池");
+            CardDef fInfB = new CardDef("_test_infantry_b", "步兵乙(测试)", 3, 2,
+                                        CardType.Unit, UnitType.Infantry, Keyword.None, 0, 3, 4, EffectId.None, 0, "自检夹具，不进卡池");
+            CardDef fTank = new CardDef("_test_tank", "坦克(测试)", 4, 2,
+                                        CardType.Unit, UnitType.Tank, Keyword.None, 0, 4, 5, EffectId.None, 0, "自检夹具，不进卡池");
+            CardDef fArt = new CardDef("_test_artillery", "火炮(测试)", 5, 3,
+                                       CardType.Unit, UnitType.Artillery, Keyword.None, 0, 6, 5, EffectId.None, 0, "自检夹具，不进卡池");
 
-            CardDef mg = CardDb.Get("unit_mg_nest");        // 步兵 2/3
-            CardDef para = CardDb.Get("unit_paratrooper");  // 步兵 3/4
-            CardDef armored = CardDb.Get("unit_armored");   // 坦克 4/5
-            CardDef howitzer = CardDb.Get("unit_howitzer"); // 火炮 6/5
+            // [任务4] 以下四个引用指向**局部夹具**（无词条、原面板）而非池内实体：
+            // 保证 9.1/9.2 的反击矩阵只反映兵种规则（词条的结算断言在第 12 项）。
+            CardDef mg = fInfA;         // 步兵 2/3（夹具）
+            CardDef para = fInfB;       // 步兵 3/4（夹具）
+            CardDef armored = fTank;    // 坦克 4/5（夹具）
+            CardDef howitzer = fArt;    // 火炮 6/5（夹具）
 
             // ---- 9.1 单位互攻的反击矩阵 ----
             // ⚠️ 后三条是 [阶段2.5 · 提交 C] 新增，专门锁定「轰炸机打战斗机」这条例外的**方向**：
@@ -1065,7 +1086,7 @@ namespace KardsLike.EditorTools
 
             // ---- 9.4 数据层断言 ----
             bool howitzerOnlyArtillery = CardDb.CountUnitsOfKind(UnitType.Artillery) == 1
-                                         && howitzer.UnitKind == UnitType.Artillery;
+                                         && CardDb.Get("unit_howitzer").UnitKind == UnitType.Artillery;
             bool airInPoolExactlyOne = CardDb.CountUnitsOfKind(UnitType.Fighter) == 1
                                        && CardDb.CountUnitsOfKind(UnitType.Bomber) == 1
                                        && CardDb.Cards.Length == 14
@@ -1318,7 +1339,7 @@ namespace KardsLike.EditorTools
             sb.AppendLine("**不豁免部署失调**。全部断言手工摆盘 + 期望值硬编码（不拿被测代码算期望值）。");
             sb.AppendLine();
 
-            CardDef armored = CardDb.Get("unit_armored");   // 坦克 4/5，行动费 2
+            CardDef armored = CardDb.Get("unit_armored");   // [任务4] 坦克 4/4 + 重甲 1，行动费 2
             CardDef scout = CardDb.Get("unit_scout");       // 步兵 1/2，行动费 1
 
             // ---- 11.1 坦克：先移动、后攻击（各扣一次费）----
@@ -1423,8 +1444,9 @@ namespace KardsLike.EditorTools
             sb.AppendLine("- 移动后资源 = " + (cost - 1) + "（行动费 " + cost + "）→ CanUnitAttack 被拒：" + eAtkRejected +
                           "（" + whyE + "）；资源保持：" + eNoSpend);
             sb.AppendLine();
-            sb.AppendLine("> ⚠️ 「闪击 × 坦克 = 登场即可移+攻」的断言**留桩**：依赖任务 4（闪击字段）落地后补进本项，");
-            sb.AppendLine("> 不得在任务 4 前含糊成「已测」。");
+            sb.AppendLine("> [任务4 收口] 「闪击」字段已落地：闪击的部署路径与二选一断言在第 12 项（12.1~12.4）——");
+            sb.AppendLine("> 「闪击 × 坦克 = 登场即可移+攻」的完整语义 = 第 12 项「闪击真实部署路径」+ 本项「非失调坦克可移+攻」两截复合");
+            sb.AppendLine(">（卡池当前没有闪击坦克卡；若以后给坦克挂闪击，再补端到端断言）。");
             sb.AppendLine();
 
             ok = e1 && e2 && e3 && e4 && e5 && e6 && e7;
@@ -1432,6 +1454,245 @@ namespace KardsLike.EditorTools
             sb.AppendLine("**结论：" + (ok
                 ? "坦克同回合可移动且攻击（两笔各扣一次、顺序不限、范围按当下位置算）；非坦克仍二选一；部署失调不豁免；资源不足时第二动作被拒且不扣钱。"
                 : "坦克「移动 + 攻击」行为不符预期，详见上文。") + "**");
+            sb.AppendLine();
+            return sb.ToString();
+        }
+
+        // ==================================================================
+        // 第 12 项 · 关键字第一批：闪击 / 重甲 / 冲击（[阶段2.6 · 任务4] 新增）
+        // ==================================================================
+
+        private static string RunKeywordsBatch1(out bool ok, out string title)
+        {
+            title = "关键字第一批：闪击（部署即可行动、非坦克二选一）/ 重甲（只减单位攻击）/ 冲击（首攻免反 + 只要攻击就消耗）";
+            ok = false;
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("## 第 12 项 · 关键字第一批（闪击 / 重甲 / 冲击）（设计文档 §14.1 / §14.4）");
+            sb.AppendLine();
+            sb.AppendLine("口径（官方原文核实见《阶段2.6-任务4-关键字第一批-规则复述与设计问答复核.md》§1）：");
+            sb.AppendLine("**闪击** = 部署当回合即可行动（额度仍由行动经济决定：非坦克二选一、坦克可移+攻）；");
+            sb.AppendLine("**重甲 X** = 只减「单位攻击」伤害（主动/反击两个方向、下限 0），**不**减指令伤害；");
+            sb.AppendLine("**冲击** = 首攻时被攻击单位反击为 0；**本作口径：只要发动攻击就消耗**（含打 HQ；一次性不恢复）。");
+            sb.AppendLine("期望值全部硬编码（不拿被测代码算期望值）。");
+            sb.AppendLine();
+
+            // 局部夹具（不进卡池）：无词条基准，专门给"词条效果"做对照样本。
+            CardDef fTank = new CardDef("_t4_tank", "坦克(测试)", 4, 2,
+                                        CardType.Unit, UnitType.Tank, Keyword.None, 0, 4, 5, EffectId.None, 0, "自检夹具，不进卡池");
+            CardDef fInf = new CardDef("_t4_inf", "步兵(测试)", 3, 2,
+                                       CardType.Unit, UnitType.Infantry, Keyword.None, 0, 3, 4, EffectId.None, 0, "自检夹具，不进卡池");
+
+            // 池内词条卡（本轮挂载的实体）：
+            CardDef para = CardDb.Get("unit_paratrooper");  // 3 费 3/3 + 闪击
+            CardDef scout = CardDb.Get("unit_scout");       // 1 费 1/2（对照：无闪击）
+            CardDef armored = CardDb.Get("unit_armored");   // 4 费 4/4 + 重甲 1
+            CardDef sniper = CardDb.Get("unit_sniper");     // 3 费 4/2 + 冲击
+            CardDef mg = CardDb.Get("unit_mg_nest");        // 2 费 2/2 + 冲击
+            CardDef howitzer = CardDb.Get("unit_howitzer"); // 5 费 6/5（无词条）
+
+            // ---- 12.1~12.3 闪击：真实部署路径（PlayCard）当回合即可行动 ----
+            // ⚠️ 移动与攻击分别用**两个独立夹具**：敌方单位占住前线时"移入"会被拒，
+            // 同一棋盘上无法同时断言"可以移动"与"有攻击目标"（首版把两者放一起，k1 被 900 号夹具误伤）。
+            // 夹具 A（无敌人）：测 CanUnitMove + 移动后的二选一。
+            GameEngine engA = NewCounterFixture(900);
+            engA.State.Players[0].Hand.Add(para);
+            bool deployedA = engA.PlayCard(0, -1);
+            UnitInstance paraU = deployedA && engA.State.Players[0].SupportLine.Count > 1
+                ? engA.State.Players[0].SupportLine[engA.State.Players[0].SupportLine.Count - 1] : null;
+
+            string whyA = "", whyC = "";
+            bool k1 = paraU != null && !paraU.DeployedThisTurn && engA.CanUnitMove(paraU, out whyA);
+            bool movedA = paraU != null && engA.MoveUnit(paraU.InstanceId);
+            bool k3 = movedA && !engA.CanUnitAttack(paraU, out whyC);   // 非坦克：移动后当回合不能再攻击
+
+            // 夹具 A2（敌方前线有目标）：测部署当回合 CanUnitAttack。
+            GameEngine engA2 = NewCounterFixture(9001);
+            PlaceUnit(engA2, scout, 1, Line.Front);
+            engA2.State.Players[0].Hand.Add(para);
+            bool deployedA2 = engA2.PlayCard(0, -1);
+            UnitInstance paraU2 = deployedA2 && engA2.State.Players[0].SupportLine.Count > 1
+                ? engA2.State.Players[0].SupportLine[engA2.State.Players[0].SupportLine.Count - 1] : null;
+            string whyB = "";
+            bool k2 = paraU2 != null && engA2.CanUnitAttack(paraU2, out whyB);
+
+            sb.AppendLine("### 12.1~12.3 闪击（真实 `PlayCard` 部署路径；移动/攻击分别用独立夹具）");
+            sb.AppendLine();
+            sb.AppendLine("- [A] 部署成功：" + deployedA + "；`DeployedThisTurn` = " +
+                          (paraU == null ? "—" : paraU.DeployedThisTurn.ToString()) + "（期望 false —— 闪击跳过部署失调）");
+            sb.AppendLine("- [A] 部署当回合 CanUnitMove：" + k1 + (whyA.Length > 0 ? "（" + whyA + "）" : "") + "（期望 true —— 无敌人占线）");
+            sb.AppendLine("- [A] 当回合移动后再攻击被拒：" + k3 + (whyC.Length > 0 ? "（" + whyC + "）" : "") +
+                          "（期望 true —— 非坦克二选一，官方细则「闪击不能同回合移+攻、除非是坦克」）");
+            sb.AppendLine("- [A2] 敌方前线有目标时，部署当回合 CanUnitAttack：" + k2 + (whyB.Length > 0 ? "（" + whyB + "）" : "") + "（期望 true）");
+            sb.AppendLine();
+
+            // ---- 12.4 对照：无闪击单位部署当回合不能行动 ----
+            GameEngine engB = NewCounterFixture(901);
+            engB.State.Players[0].Hand.Add(scout);
+            bool deployedB = engB.PlayCard(0, -1);
+            UnitInstance scoutU = deployedB && engB.State.Players[0].SupportLine.Count > 1
+                ? engB.State.Players[0].SupportLine[engB.State.Players[0].SupportLine.Count - 1] : null;
+            string whyD = "", whyE = "";
+            bool k4 = scoutU != null && scoutU.DeployedThisTurn
+                      && !engB.CanUnitMove(scoutU, out whyD) && !engB.CanUnitAttack(scoutU, out whyE);
+
+            sb.AppendLine("### 12.4 对照：无闪击单位部署当回合不能行动");
+            sb.AppendLine();
+            sb.AppendLine("- 侦察兵（无闪击）部署后：`DeployedThisTurn` = " +
+                          (scoutU == null ? "—" : scoutU.DeployedThisTurn.ToString()) +
+                          "；移动被拒 " + (scoutU != null && !engB.CanUnitMove(scoutU, out whyD)) +
+                          "；攻击被拒 " + (scoutU != null && !engB.CanUnitAttack(scoutU, out whyE)) + "（期望均 true）");
+            sb.AppendLine();
+
+            // ---- 12.5~12.8 重甲：两个方向的减免 + 指令对照 + 下限 ----
+            // 12.5：无词条夹具（4 攻）打装甲车（重甲 1）⇒ 目标掉 3；反击侧未减（攻击者掉 4）
+            GameEngine engC = NewCounterFixture(902);
+            UnitInstance atkC = PlaceUnit(engC, fTank, 0, Line.Support);
+            UnitInstance tgtC = PlaceUnit(engC, armored, 1, Line.Front);
+            int aC0 = atkC.Health, tC0 = tgtC.Health;
+            bool hitC = engC.AttackWithUnit(atkC.InstanceId, tgtC.InstanceId);
+            int aCLoss = aC0 - atkC.Health, tCLoss = tC0 - tgtC.Health;
+            bool k5 = hitC && tCLoss == 3 && aCLoss == 4;
+
+            // 12.6：装甲车（重甲 1）主动打无词条夹具 ⇒ 攻击者挨的反击减 1（3 - 1 = 2）
+            GameEngine engD = NewCounterFixture(903);
+            UnitInstance atkD = PlaceUnit(engD, armored, 0, Line.Support);
+            UnitInstance tgtD = PlaceUnit(engD, fInf, 1, Line.Front);
+            int aD0 = atkD.Health, tD0 = tgtD.Health;
+            bool hitD = engD.AttackWithUnit(atkD.InstanceId, tgtD.InstanceId);
+            int aDLoss = aD0 - atkD.Health, tDLoss = tD0 - tgtD.Health;
+            bool k6 = hitD && aDLoss == 2 && tDLoss == 4;
+
+            // 12.7：重甲**不**减指令伤害（精准打击 3 伤 / 炮火覆盖 2 伤）
+            GameEngine engE = NewCounterFixture(904);
+            UnitInstance strikeTgt = PlaceUnit(engE, armored, 1, Line.Front);
+            engE.State.Players[0].Hand.Add(CardDb.Get("order_strike"));
+            int s0 = strikeTgt.Health;
+            bool strikeOk = engE.PlayCard(0, strikeTgt.InstanceId);
+            int strikeLoss = s0 - strikeTgt.Health;
+
+            GameEngine engF = NewCounterFixture(905);
+            UnitInstance barrageTgt = PlaceUnit(engF, armored, 1, Line.Front);
+            engF.State.Players[0].Hand.Add(CardDb.Get("order_barrage"));
+            int b0 = barrageTgt.Health;
+            bool barrageOk = engF.PlayCard(0, -1);
+            int barrageLoss = b0 - barrageTgt.Health;
+            bool k7 = strikeOk && strikeLoss == 3 && barrageOk && barrageLoss == 2;
+
+            // 12.8：重甲 1 对 1 攻完全免疫（下限 0 边界）
+            GameEngine engG = NewCounterFixture(906);
+            UnitInstance atkG = PlaceUnit(engG, scout, 0, Line.Support);   // 侦察兵 1 攻
+            UnitInstance tgtG = PlaceUnit(engG, armored, 1, Line.Front);
+            int tG0 = tgtG.Health;
+            bool hitG = engG.AttackWithUnit(atkG.InstanceId, tgtG.InstanceId);
+            int tGLoss = tG0 - tgtG.Health;
+            bool k8 = hitG && tGLoss == 0;
+
+            // ---- 12.9~12.10 冲击：首攻免反 + 消耗（模拟下回合后反击恢复）----
+            GameEngine engH = NewCounterFixture(907);
+            UnitInstance sniperU = PlaceUnit(engH, sniper, 0, Line.Support);
+            UnitInstance tgtH = PlaceUnit(engH, fTank, 1, Line.Front);
+            int aH0 = sniperU.Health, tH0 = tgtH.Health;
+            bool hitH = engH.AttackWithUnit(sniperU.InstanceId, tgtH.InstanceId);
+            int aHLoss1 = aH0 - sniperU.Health, tHLoss1 = tH0 - tgtH.Health;
+            bool k9 = hitH && aHLoss1 == 0 && !sniperU.HasShock && tHLoss1 == 4;
+
+            sniperU.HasAttackedThisTurn = false;   // 模拟"下一个回合"（冲击**不**随之恢复）
+            int aH1 = sniperU.Health;
+            bool hitH2 = engH.AttackWithUnit(sniperU.InstanceId, tgtH.InstanceId);
+            int aHLoss2 = aH1 - sniperU.Health;
+            bool k10 = hitH2 && aHLoss2 == 4;      // 反击恢复（夹具坦克 4 攻、狙击手无重甲）
+
+            // ---- 12.11 冲击打 HQ 也消耗（本作口径；官方"打 HQ 不移除"不采纳）----
+            GameEngine engI = NewCounterFixture(908);
+            UnitInstance mgU = PlaceUnit(engI, mg, 0, Line.Front);   // 前线才够得着 HQ
+            int hq0 = engI.State.Players[1].HqHealth;
+            bool hitI = engI.AttackWithUnit(mgU.InstanceId, -1);
+            bool k11 = hitI && !mgU.HasShock && (hq0 - engI.State.Players[1].HqHealth) == 2;
+
+            // ---- 12.12 冲击 × 火炮免反击叠加（夹具手动装配）----
+            GameEngine engJ = NewCounterFixture(909);
+            UnitInstance howU = PlaceUnit(engJ, howitzer, 0, Line.Support);
+            howU.HasShock = true;    // 手动装配（卡池当前没有"冲击火炮"卡）
+            UnitInstance tgtJ = PlaceUnit(engJ, fInf, 1, Line.Front);
+            int aJ0 = howU.Health, tJ0 = tgtJ.Health;
+            bool hitJ = engJ.AttackWithUnit(howU.InstanceId, tgtJ.InstanceId);
+            bool k12 = hitJ && (aJ0 - howU.Health) == 0 && !howU.HasShock && (tJ0 - tgtJ.Health) == 6;
+
+            // ---- 12.13 冲击 × 重甲组合（首攻免反；二次攻击重甲生效）----
+            GameEngine engK = NewCounterFixture(910);
+            UnitInstance armorU = PlaceUnit(engK, armored, 0, Line.Support);
+            armorU.HasShock = true;  // 手动装配（装甲车自带重甲 1）
+            UnitInstance tgtK = PlaceUnit(engK, fTank, 1, Line.Front);
+            int aK0 = armorU.Health;
+            bool hitK1 = engK.AttackWithUnit(armorU.InstanceId, tgtK.InstanceId);
+            int k13FirstLoss = aK0 - armorU.Health;             // ⚠️ 立即读取（打完第二次后再读会变成累计值）
+            bool k13a = hitK1 && k13FirstLoss == 0;             // 首攻：冲击抵消
+            armorU.HasAttackedThisTurn = false;                 // 模拟下回合
+            int aK1 = armorU.Health;
+            bool hitK2 = engK.AttackWithUnit(armorU.InstanceId, tgtK.InstanceId);
+            int k13SecondLoss = aK1 - armorU.Health;            // 立即读取
+            bool k13b = hitK2 && k13SecondLoss == 3;            // 二次：反击 4 - 重甲 1
+            bool k13 = k13a && k13b;
+
+            // ---- 12.14 预览一致性：PreviewAttack 数字 == 实打扣血；且预览**不**消耗冲击 ----
+            GameEngine engL = NewCounterFixture(911);
+            UnitInstance pvA = PlaceUnit(engL, fTank, 0, Line.Support);
+            UnitInstance pvT = PlaceUnit(engL, armored, 1, Line.Front);
+            int pdT = 0, pdA = 0;
+            bool pvOk1 = engL.PreviewAttack(pvA.InstanceId, pvT.InstanceId, out pdT, out pdA);
+            int la0 = pvA.Health, lt0 = pvT.Health;
+            bool pvHit1 = engL.AttackWithUnit(pvA.InstanceId, pvT.InstanceId);
+            int laLoss = la0 - pvA.Health, ltLoss = lt0 - pvT.Health;
+            bool k14a = pvOk1 && pvHit1 && pdT == 3 && pdA == 4 && pdT == ltLoss && pdA == laLoss;
+
+            GameEngine engM = NewCounterFixture(912);
+            UnitInstance pvS = PlaceUnit(engM, sniper, 0, Line.Support);
+            UnitInstance pvT2 = PlaceUnit(engM, fInf, 1, Line.Front);
+            int qdT = 0, qdA = 0;
+            bool pvOk2 = engM.PreviewAttack(pvS.InstanceId, pvT2.InstanceId, out qdT, out qdA);
+            bool shockKeptByPreview = pvS.HasShock;           // ⚠️ 预览绝不能消耗冲击
+            int sa0 = pvS.Health, st0 = pvT2.Health;
+            bool pvHit2 = engM.AttackWithUnit(pvS.InstanceId, pvT2.InstanceId);
+            int saLoss = sa0 - pvS.Health, stLoss = st0 - pvT2.Health;
+            bool k14b = pvOk2 && qdT == 4 && qdA == 0 && shockKeptByPreview
+                        && pvHit2 && saLoss == qdA && stLoss == qdT;
+            bool k14 = k14a && k14b;
+
+            // ---- 表格 ----
+            sb.AppendLine("### 12.5~12.8 重甲（只减单位攻击伤害；两个方向 + 指令对照 + 下限 0）");
+            sb.AppendLine();
+            sb.AppendLine("| # | 场景 | 期望 | 实测 | 结果 |");
+            sb.AppendLine("|---|---|---|---|---|");
+            sb.AppendLine("| 12.5 | 夹具(4攻) → 装甲车(重甲1) | 目标 -3、攻击者 -4（反击侧未减） | 目标 -" + tCLoss + "、攻击者 -" + aCLoss + " | " + Mark(k5) + " |");
+            sb.AppendLine("| 12.6 | 装甲车(重甲1) → 夹具(3/4) | 攻击者 -2（3-1）、目标 -4 | 攻击者 -" + aDLoss + "、目标 -" + tDLoss + " | " + Mark(k6) + " |");
+            sb.AppendLine("| 12.7 | 精准打击3伤 / 炮火覆盖2伤 → 装甲车(重甲1) | 掉 3 / 掉 2（**不减**） | 掉 " + strikeLoss + " / 掉 " + barrageLoss + " | " + Mark(k7) + " |");
+            sb.AppendLine("| 12.8 | 侦察兵(1攻) → 装甲车(重甲1) | 目标 -0（下限 0） | 目标 -" + tGLoss + " | " + Mark(k8) + " |");
+            sb.AppendLine();
+            sb.AppendLine("### 12.9~12.13 冲击（首攻免反、消耗、打 HQ 也消耗、组合两条）");
+            sb.AppendLine();
+            sb.AppendLine("| # | 场景 | 期望 | 实测 | 结果 |");
+            sb.AppendLine("|---|---|---|---|---|");
+            sb.AppendLine("| 12.9 | 狙击手(冲击) 首攻夹具坦克 | 攻击者 -0、冲击消耗 | 攻击者 -" + aHLoss1 + "、消耗 " + !sniperU.HasShock + " | " + Mark(k9) + " |");
+            sb.AppendLine("| 12.10 | （模拟下回合）二次攻击 | 反击恢复 -4 | 攻击者 -" + aHLoss2 + " | " + Mark(k10) + " |");
+            sb.AppendLine("| 12.11 | 机枪阵地(冲击) → 敌方 HQ | 消耗冲击、HQ -2 | 消耗 " + !mgU.HasShock + "、HQ -" + (hq0 - engI.State.Players[1].HqHealth) + " | " + Mark(k11) + " |");
+            sb.AppendLine("| 12.12 | 冲击+火炮（手动装配）→ 夹具 | -0（火炮本就免反）、冲击照常消耗 | -" + (aJ0 - howU.Health) + "、消耗 " + !howU.HasShock + " | " + Mark(k12) + " |");
+            sb.AppendLine("| 12.13 | 冲击+重甲（手动装配）：首攻 / 二次 | -0 / -3（4-1） | -" + k13FirstLoss + " / -" + k13SecondLoss + " | " + Mark(k13) + " |");
+            sb.AppendLine();
+            sb.AppendLine("### 12.14 预览一致性（`PreviewAttack` == 实打扣血；预览不消耗冲击）");
+            sb.AppendLine();
+            sb.AppendLine("| # | 场景 | 期望 | 实测 | 结果 |");
+            sb.AppendLine("|---|---|---|---|---|");
+            sb.AppendLine("| 12.14a | 夹具(4攻) → 装甲车：预览 vs 实打 | 预览(3,4) = 实打(3,4) | 预览(" + pdT + "," + pdA + ") / 实打(" + ltLoss + "," + laLoss + ") | " + Mark(k14a) + " |");
+            sb.AppendLine("| 12.14b | 狙击手(冲击) → 夹具：预览(4,0)，且预览不消耗冲击 | 一致 + 冲击保留 | 预览(" + qdT + "," + qdA + ") / 实打(" + stLoss + "," + saLoss + ") / 冲击保留 " + shockKeptByPreview + " | " + Mark(k14b) + " |");
+            sb.AppendLine();
+
+            ok = k1 && k2 && k3 && k4 && k5 && k6 && k7 && k8 && k9 && k10 && k11 && k12 && k13 && k14;
+
+            sb.AppendLine("**结论：" + (ok
+                ? "闪击（部署即可行动、非坦克二选一、无闪击对照）；重甲（两个方向 -X、指令不减、下限 0）；"
+                  + "冲击（首攻反击为 0、只要攻击就消耗、二次攻击恢复、组合无异常）；预览与结算同源且预览不消耗冲击 —— 全部符合设计。"
+                : "关键字行为不符预期，详见上表。") + "**");
             sb.AppendLine();
             return sb.ToString();
         }

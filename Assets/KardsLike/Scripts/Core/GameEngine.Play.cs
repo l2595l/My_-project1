@@ -135,7 +135,10 @@ namespace KardsLike.Core
             {
                 UnitInstance unit = new UnitInstance(State.NextUnitInstanceId++, card, p.Index);
                 unit.Line = Line.Support;        // [STAGE2B] 新单位一律落在支援阵线
-                unit.DeployedThisTurn = true;    // 部署失调：当回合既不能移动也不能攻击
+                // [任务4] 部署失调：当回合既不能移动也不能攻击 —— **闪击除外**（部署后立即行动）。
+                // 注意闪击只解除"失调"这一个布尔；行动额度仍由行动经济判定
+                // （非坦克"移动或攻击"二选一、坦克可"移动 + 攻击"——官方细则自动成立，零特殊代码）。
+                unit.DeployedThisTurn = !card.HasKeyword(Keyword.Blitz);
                 p.SupportLine.Add(unit);
                 State.AddLog(p.Name + " 部署 " + card.Name + " 到支援阵线（" +
                              card.Attack + "/" + card.Health + "）");

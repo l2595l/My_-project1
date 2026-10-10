@@ -96,13 +96,15 @@ namespace KardsLike.Core
 
         private IEnumerable<string> PlayCardsPhase()
         {
-            // [STAGE2C] 先算出"必须留给行动的那笔钱"，出牌时不准动它。
-            // 一轮出牌不会改变这个数（新部署的单位处于部署失调，本来就不能行动），所以算一次就够。
-            int reserve = ReserveForActions(_engine.State.Current);
-
             while (true)
             {
                 if (_engine.State.IsOver) yield break;
+
+                // [任务4] "必须留给行动的那笔钱"改为**每次循环重算**：
+                // 闪击单位部署后立刻就能行动（DeployedThisTurn=false），会即时进入
+                // ReserveForActions 的计数——旧注释"一轮出牌不会改变这个数"的前提被闪击打破。
+                // 重算成本可忽略（扫一遍己方单位），换来 AI 会自动给闪击单位留出行动费。
+                int reserve = ReserveForActions(_engine.State.Current);
 
                 PlayerState ai = _engine.State.Current;
                 int bestIndex = -1;
@@ -364,7 +366,9 @@ namespace KardsLike.Core
                             // 已删除 —— 合法性完全由 CanAttackTarget 判定（内含射程与拦截）。
                             if (!_engine.CanAttackTarget(atk, tgt, out reason)) continue;
 
-                            bool kills = atk.Attack >= tgt.Health;
+                            // [任务4] "能不能击杀"必须**问引擎出口**（含目标重甲）——
+                            // 自己拿 atk.Attack 算会高估（重甲会吃掉伤害），AI 会做出送死交换。
+                            bool kills = GameEngine.UnitAttackDamage(atk, tgt) >= tgt.Health;
                             if (!kills) continue;
 
                             // [阶段2.5 · 任务 A] "我会不会死"必须**问引擎**，不能自己拿 tgt.Attack 猜。

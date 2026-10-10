@@ -9,7 +9,8 @@ namespace KardsLike.Core
     ///   加一张新卡只需要改下面的 Cards 数组，不需要动 GameEngine 里任何一行。
     ///   如果加卡时被迫修改了结算函数，说明抽象漏了，要回头补设计。
     ///
-    /// 数值自查口径：单位卡的 攻击 + 生命 必须等于 2 × 费用 + 1。
+    /// 数值自查口径：单位卡的 攻击 + 生命 必须等于 2 × 费用 + 1
+    ///   （[阶段2.6 · 任务4] 起：带词条的卡再 **−1**（面板折让），由 ValidatePanelBudget 校验）。
     /// </summary>
     public static class CardDb
     {
@@ -27,6 +28,11 @@ namespace KardsLike.Core
         ///   · `UnitType` 兵种 —— 决定反击结算规则
         ///   · `int`      行动费 —— 必须等于 `ExpectedActionCost(费用)`，由 ValidatePanelBudget 校验
         ///
+        /// [阶段2.6 · 任务4] 每张卡再新增两个参数（紧跟兵种后面）：`Keyword` 词条位 + `int` 重甲。
+        ///   **带词条的卡面板预算 −1**（拍板 (a) 面板折让，见设计文档 §14.4 与 ValidatePanelBudget）。
+        ///   本轮挂载 6 张：伞兵/战斗机（闪击）、装甲车/重型坦克（重甲 1）、狙击手/机枪阵地（冲击）——
+        ///   逐卡对照表见《阶段2.6-任务4-关键字第一批-规则复述与设计问答复核.md》§3 · Q6。
+        ///
         /// [阶段2.5 · 提交 C] 当前池内兵种分布：**步兵 5 / 坦克 2 / 火炮 1 / 战斗机 1 / 轰炸机 1**。
         ///   两张空军卡的设计见《阶段2.5-任务A-规则复述与设计问答复核.md》§3.1：
         ///   `unit_fighter` 3 费 4/3、`unit_bomber` 4 费 4/5，均满足 `攻 + 血 = 2 × 费 + 1`。
@@ -37,57 +43,57 @@ namespace KardsLike.Core
         {
             // ---- 1 费（预算 3，行动费 1）：一对同预算反向分配的对照卡 ----
             // 1/2：站得住，但打不死人。鼓励"第一回合就下东西"。
-            new CardDef("unit_scout",      "侦察兵",  1, 1, CardType.Unit, UnitType.Infantry, 1, 2, EffectId.None, 0,
+            new CardDef("unit_scout",      "侦察兵",  1, 1, CardType.Unit, UnitType.Infantry, Keyword.None, 0, 1, 2, EffectId.None, 0,
                 "1 费基准体：能白吃一个 1/1 并存活，但威胁极低。"),
 
             // 2/1：打得疼，但任何伤害都能带走它。
-            new CardDef("unit_rifleman",   "步兵班",  1, 1, CardType.Unit, UnitType.Infantry, 2, 1, EffectId.None, 0,
+            new CardDef("unit_rifleman",   "步兵班",  1, 1, CardType.Unit, UnitType.Infantry, Keyword.None, 0, 2, 1, EffectId.None, 0,
                 "1 费最高的攻击力，代价是 1 血：碰到就死。"),
 
             // ---- 2 费（预算 5，行动费 1）----
             // 2/3：3 血让 1 费单位（最高 2 攻）无法一击清除。
             // 兵种刻意留步兵：2 费带"免反击"偏强，见 §10.1 的选型理由。
-            new CardDef("unit_mg_nest",    "机枪阵地", 2, 1, CardType.Unit, UnitType.Infantry, 2, 3, EffectId.None, 0,
-                "2 费标准体：至少能在场上活过一个回合。"),
+            new CardDef("unit_mg_nest",    "机枪阵地", 2, 1, CardType.Unit, UnitType.Infantry, Keyword.Shock, 0, 2, 2, EffectId.None, 0,
+                "冲击：首次攻击不受反击。压制火力的第一轮最凶。"),
 
             // ---- 3 费（预算 7，行动费 2）：第二对同预算反向分配的对照卡 ----
             // 3/4：中期的"参照物"，打得过它又比它便宜的卡就是超模。
-            new CardDef("unit_paratrooper", "伞兵",    3, 2, CardType.Unit, UnitType.Infantry, 3, 4, EffectId.None, 0,
-                "3 费标准体，攻守均衡，是中期的强度标尺。"),
+            new CardDef("unit_paratrooper", "伞兵",    3, 2, CardType.Unit, UnitType.Infantry, Keyword.Blitz, 0, 3, 3, EffectId.None, 0,
+                "闪击：部署当回合即可行动。空降兵抢的就是时间差。"),
 
             // 4/3：能秒杀 3 血及以下的一切，但自己也在任何 3 攻面前站不住。
-            new CardDef("unit_sniper",     "狙击手",  3, 2, CardType.Unit, UnitType.Infantry, 4, 3, EffectId.None, 0,
-                "高风险高回报：4 攻能秒杀多数 3 费以下单位，但极易被反杀。"),
+            new CardDef("unit_sniper",     "狙击手",  3, 2, CardType.Unit, UnitType.Infantry, Keyword.Shock, 0, 4, 2, EffectId.None, 0,
+                "冲击：首次攻击不受反击。开第一枪的人最安全。"),
 
             // [阶段2.5 · 提交 C] 新增。4/3 与「狙击手」面板相同，差别在兵种：
             //   战斗机承受反击（正常双向）；它真正的独有能力是"任意战线 + 拦截轰炸机"，
             //   属于**任务 D**（越线射程那一轮），本轮进池时行为与步兵一致。
-            new CardDef("unit_fighter",    "战斗机",  3, 2, CardType.Unit, UnitType.Fighter, 4, 3, EffectId.None, 0,
-                "空中优势：只能被战斗机逼停。"),
+            new CardDef("unit_fighter",    "战斗机",  3, 2, CardType.Unit, UnitType.Fighter, Keyword.Blitz, 0, 4, 2, EffectId.None, 0,
+                "闪击：部署当回合即可行动。制空兵种，还能拦截轰炸机。"),
 
             // ---- 4 费（预算 9，行动费 2）----
             // 4/5：只有榴弹炮（6 攻）能一击清除它，滚雪球能力最强。
-            new CardDef("unit_armored",    "装甲车",  4, 2, CardType.Unit, UnitType.Tank, 4, 5, EffectId.None, 0,
-                "全卡池最难被单张牌处理的单位，容易滚雪球。"),
+            new CardDef("unit_armored",    "装甲车",  4, 2, CardType.Unit, UnitType.Tank, Keyword.None, 1, 4, 4, EffectId.None, 0,
+                "重甲 1：受到的每次单位攻击伤害 -1。钢板让 1 点伤害完全无效。"),
 
             // [阶段2.5 · 提交 C] 新增。**轰炸机**：攻击时不受反击，但攻击战斗机时例外
             //   （原文「轰炸机在攻击时不会受到反击伤害（除非攻击目标是战斗机）」）；
             //   被攻击时也不造成反击。见设计文档 §12.2 / CounterDamage()。
             //   独有能力"任意战线 + 无视守护"属任务 D。
-            new CardDef("unit_bomber",     "轰炸机",  4, 2, CardType.Unit, UnitType.Bomber, 4, 5, EffectId.None, 0,
+            new CardDef("unit_bomber",     "轰炸机",  4, 2, CardType.Unit, UnitType.Bomber, Keyword.None, 0, 4, 5, EffectId.None, 0,
                 "重型轰炸：开火时不受反击（战斗机除外），但被攻击时也毫无还手之力。"),
 
             // ---- 5 费（预算 11，行动费 3）----
             // 6/5：全卡池最高攻击力，放着不管三次攻击就是 18 点。
             // [阶段2.5 · 任务 A] **池内唯一的火炮**，也是本轮唯一真正改规则的一张卡：
             //   它攻击任何单位都不再自损（改前打 7/6 重坦会同归于尽，改后白吃）。
-            new CardDef("unit_howitzer",   "榴弹炮",  5, 3, CardType.Unit, UnitType.Artillery, 6, 5, EffectId.None, 0,
+            new CardDef("unit_howitzer",   "榴弹炮",  5, 3, CardType.Unit, UnitType.Artillery, Keyword.None, 0, 6, 5, EffectId.None, 0,
                 "给对局设定时钟：不解它，三回合后 HQ 就没了。开火时不受反击。"),
 
             // ---- 6 费（预算 13，行动费 3）----
             // 7/6：最强也最卡手，资源 5 之前摸到就是废牌。
-            new CardDef("unit_tank",       "重型坦克", 6, 3, CardType.Unit, UnitType.Tank, 7, 6, EffectId.None, 0,
-                "两刀砍掉 14 点 HQ，代价是极高的卡手风险。")
+            new CardDef("unit_tank",       "重型坦克", 6, 3, CardType.Unit, UnitType.Tank, Keyword.None, 1, 7, 5, EffectId.None, 0,
+                "重甲 1：受到的每次单位攻击伤害 -1。两刀砍掉 14 点 HQ。")
         };
 
         /// <summary>
@@ -103,7 +109,7 @@ namespace KardsLike.Core
         /// 引擎里不需要任何方向特判。血量取自 GameEngine.HqStartingHealth（20）。
         /// </summary>
         public static readonly CardDef Hq =
-            new CardDef("hq", "指挥部", 0, 0, CardType.Hq, UnitType.None, 0, GameEngine.HqStartingHealth, EffectId.None, 0,
+            new CardDef("hq", "指挥部", 0, 0, CardType.Hq, UnitType.None, Keyword.None, 0, 0, GameEngine.HqStartingHealth, EffectId.None, 0,
                 "大本营。被击破即告负。");
 
         /// <summary>4 张指令卡。见设计文档 §4.3。
@@ -112,21 +118,21 @@ namespace KardsLike.Core
         public static readonly CardDef[] Orders = new CardDef[]
         {
             // 1 费唯一"不影响场面"的牌，给运气差的一方一条追赶路径。
-            new CardDef("order_supply",  "补给空投", 1, 0, CardType.Order, UnitType.None, 0, 0, EffectId.DrawCards, 2,
+            new CardDef("order_supply",  "补给空投", 1, 0, CardType.Order, UnitType.None, Keyword.None, 0, 0, 0, EffectId.DrawCards, 2,
                 "抽 2 张牌。"),
 
             // 3 点伤害刻意打不死满血 2 费单位（预算 5），必须配合补刀。
             // [FIX-1] 卡面文案已同步"仅敌方单位"这个决定（设计文档 §4.3 / §6.4.1）——
             //         引擎校验改了、卡面还写着"任意一个单位"的话，玩家会以为能打自己。
-            new CardDef("order_strike",  "精准打击", 2, 0, CardType.Order, UnitType.None, 0, 0, EffectId.DamageUnit, 3,
+            new CardDef("order_strike",  "精准打击", 2, 0, CardType.Order, UnitType.None, Keyword.None, 0, 0, 0, EffectId.DamageUnit, 3,
                 "对敌方任意一个单位造成 3 点伤害。"),
 
             // 上限封顶 20，满血时使用等于白扔 —— 逼玩家做真实取舍。
-            new CardDef("order_medic",   "战场急救", 2, 0, CardType.Order, UnitType.None, 0, 0, EffectId.HealHq, 5,
+            new CardDef("order_medic",   "战场急救", 2, 0, CardType.Order, UnitType.None, Keyword.None, 0, 0, 0, EffectId.HealHq, 5,
                 "我方 HQ 回复 5 点生命（上限 20）。"),
 
             // 唯一的 AOE，存在意义是威慑对手不要无脑铺小怪。
-            new CardDef("order_barrage", "炮火覆盖", 4, 0, CardType.Order, UnitType.None, 0, 0, EffectId.DamageAllEnemyUnits, 2,
+            new CardDef("order_barrage", "炮火覆盖", 4, 0, CardType.Order, UnitType.None, Keyword.None, 0, 0, 0, EffectId.DamageAllEnemyUnits, 2,
                 "对敌方所有单位造成 2 点伤害。")
         };
 
@@ -203,18 +209,28 @@ namespace KardsLike.Core
         ///      不查的话新卡会静默地按"普通双向结算"跑，表现为"数据诡异但查不出原因"
         ///   ③ **行动费与档位一致**：`ActionCost == ExpectedActionCost(Cost)`
         ///   ④ 反向约束：**指令卡与 HQ 不得有兵种、不得有行动费**（它们不行动）
+        ///
+        /// [阶段2.6 · 任务4] 再扩展两条（词条体系落地）：
+        ///   ⑤ **词条折让**：①的公式改为 `攻击 + 生命 = 2 × 费用 + 1 −（带词条 ? 1 : 0）`
+        ///      —— 拍板 (a)"面板折让"的实现点，见设计文档 §14.4；
+        ///   ⑥ **词条与重甲合法性**：词条位只允许"已实现"的（`AllowedKeywords`），
+        ///      重甲范围 0~3；指令卡 / HQ 不得有词条与重甲。
         /// </summary>
         public static string ValidatePanelBudget()
         {
-            // ① 面板预算 + ② 兵种已填写 + ③ 行动费档位
+            // ① 面板预算（含词条折让）+ ② 兵种已填写 + ③ 行动费档位 + ⑥ 词条与重甲合法性
             for (int i = 0; i < Units.Length; i++)
             {
                 CardDef c = Units[i];
 
-                int expected = CardDef.BudgetForCost(c.Cost);
+                // [任务4] 带词条的卡面板预算 −1（"带词条" = 有布尔词条 或 重甲 > 0；
+                // 不论几条、不论重甲几级，统一 −1）。判据与公开辅助 HasAnyKeyword 同一份。
+                int deduction = HasAnyKeyword(c) ? 1 : 0;
+                int expected = CardDef.BudgetForCost(c.Cost) - deduction;
                 if (c.PanelValue != expected)
                 {
                     return c.Id + " 面板点数 " + c.PanelValue + " != 预算 " + expected +
+                           (deduction > 0 ? "（已按词条折让 1 点）" : "") +
                            "（攻击 " + c.Attack + " + 生命 " + c.Health + "，费用 " + c.Cost + "）";
                 }
 
@@ -229,9 +245,20 @@ namespace KardsLike.Core
                     return c.Id + " 行动费 " + c.ActionCost + " != 档位期望 " + expectedAction +
                            "（费用 " + c.Cost + "，档位规则：1~2→1 / 3~4→2 / 5~6→3）";
                 }
+
+                // [任务4] 只允许"已实现"的词条位 —— 防止"加了枚举值忘了实现"静默上线。
+                if ((c.Keywords & ~AllowedKeywords) != 0)
+                {
+                    return c.Id + " 含有未实现的词条位（" + c.Keywords + "）——当前已实现：Blitz / Shock";
+                }
+                // [任务4] 重甲范围：官方"单位最多可以拥有 3 重甲"；负数同样是数据错误。
+                if (c.HeavyArmor < 0 || c.HeavyArmor > 3)
+                {
+                    return c.Id + " 重甲值 " + c.HeavyArmor + " 越界（合法 0~3）";
+                }
             }
 
-            // ④ 指令卡与 HQ 不该有兵种与行动费
+            // ⑤ 指令卡与 HQ 不该有兵种、行动费、词条与重甲
             for (int i = 0; i < Orders.Length; i++)
             {
                 CardDef c = Orders[i];
@@ -243,6 +270,10 @@ namespace KardsLike.Core
                 {
                     return c.Id + " 是指令卡，行动费应为 0（实际 " + c.ActionCost + "）";
                 }
+                if (c.Keywords != Keyword.None || c.HeavyArmor != 0)
+                {
+                    return c.Id + " 是指令卡，不该有词条（Keywords=" + c.Keywords + ", 重甲=" + c.HeavyArmor + "）";
+                }
             }
             if (Hq.UnitKind != UnitType.None)
             {
@@ -252,8 +283,23 @@ namespace KardsLike.Core
             {
                 return "HQ 行动费应为 0（实际 " + Hq.ActionCost + "）";
             }
+            if (Hq.Keywords != Keyword.None || Hq.HeavyArmor != 0)
+            {
+                return "HQ 不该有词条（Keywords=" + Hq.Keywords + ", 重甲=" + Hq.HeavyArmor + "）";
+            }
 
             return null;
+        }
+
+        /// <summary>[阶段2.6 · 任务4] 已实现的词条位（枚举加新值时必须同步这里 ——
+        /// "加了枚举值忘了实现"会由 ValidatePanelBudget 抓出，不会静默上线）。</summary>
+        private const Keyword AllowedKeywords = Keyword.Blitz | Keyword.Shock;
+
+        /// <summary>[阶段2.6 · 任务4] 这张卡是否带任何词条（布尔词条 或 重甲）。
+        /// 同时是"带词条 ⇒ 面板折让 1 点"的判据（校验与文档引用同一份）。</summary>
+        public static bool HasAnyKeyword(CardDef c)
+        {
+            return c.Keywords != Keyword.None || c.HeavyArmor > 0;
         }
 
         /// <summary>[阶段2.5 · 任务 A] 某个兵种当前在池内有几张单位卡。
